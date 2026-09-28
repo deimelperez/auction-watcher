@@ -11,6 +11,8 @@ Usage:
     python auction_watcher.py --dry-run         # live fetch, print instead of alerting
     python auction_watcher.py --folio 28-2202-029-2320   # test the land-use lookup
 
+Alerts: one when a listing first appears, then reminders REMIND_DAYS before the sale (default 7 and 1).
+
 Config comes from environment variables (see CONFIG below).
 """
 import argparse
@@ -21,7 +23,7 @@ import re
 import smtplib
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -49,6 +51,8 @@ MAX_BID = float(os.getenv("MAX_BID", "0") or 0)          # 0 = no limit
 ZIPS = {z.strip() for z in os.getenv("ZIPS", "").split(",") if z.strip()}  # empty = any
 
 SEEN_FILE = Path(os.getenv("SEEN_FILE", "seen.json"))
+# Reminder alerts: days before the sale (default: a week before and a day before).
+REMIND_DAYS = sorted({int(d) for d in os.getenv("REMIND_DAYS", "7,1").split(",") if d.strip()}, reverse=True)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -264,15 +268,29 @@ def land_use_ok(item: dict) -> bool:
 # ----------------------------------------------------------------------------
 # STATE + ALERTS
 # ----------------------------------------------------------------------------
-def load_seen() -> set[str]:
+def load_seen() -> dict:
+    """State per auction item id: {"sale_date", "ok" (passed land-use filter), "land_use", "reminded": [days]}."""
     try:
-        return set(json.loads(SEEN_FILE.read_text()))
+        data = json.loads(SEEN_FILE.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
-        return set()
+        return {}
+    if isinstance(data, list):  # old format: plain list of ids -> treat as seen, no reminders sent yet
+        return {i: {"sale_date": "", "ok": True, "land_use": None, "reminded": []} for i in data}
+    return data
 
 
-def save_seen(seen: set[str]) -> None:
-    SEEN_FILE.write_text(json.dumps(sorted(seen), indent=0))
+def save_seen(seen: dict) -> None:
+    today = date.today()
+    # drop items whose sale date has passed so the file doesn't grow forever
+    keep_ = {k: v for k, v in seen.items() if (days_until(v.get("sale_date", ""), today) or 0) >= 0}
+    SEEN_FILE.write_text(json.dumps(keep_, indent=1, sort_keys=True))
+
+
+def days_until(sale_date: str, today: date) -> int | None:
+    try:
+        return (datetime.strptime(sale_date, DATE_FORMAT).date() - today).days
+    except ValueError:
+        return None
 
 
 def fmt(item: dict) -> str:
@@ -323,9 +341,8 @@ def send_email(subject: str, text: str) -> None:
         smtp.send_message(msg)
 
 
-def notify(new: list[dict], dry_run: bool) -> None:
-    body = "\n\n".join(fmt(i) for i in new)
-    subject = f"{len(new)} new auction listing(s)"
+def notify(items: list[dict], subject: str, dry_run: bool) -> None:
+    body = "\n\n".join(fmt(i) for i in items)
     if dry_run or not (TELEGRAM_TOKEN or SMTP_USER):
         print(f"--- {subject} ---\n{body}")
         return
@@ -358,16 +375,51 @@ def main() -> None:
 
     items = [i for i in fetch_all() if keep(i)]
     seen = load_seen()
+    today = date.today()
+
+    # 1) New listings: look up land use once, alert if they pass the filter
     new = [i for i in items if i["id"] not in seen]
     enrich(new)  # only look up parcels we haven't seen, to keep requests low
-    alerts = [i for i in new if land_use_ok(i)]
-    print(f"{len(items)} matching, {len(new)} new, {len(alerts)} pass land-use filter")
-    if alerts:
-        notify(alerts, args.dry_run)
-    if new and not args.dry_run:
-        # remember every new item, including ones filtered out, so they aren't looked up again
-        save_seen(seen | {i["id"] for i in new})
+    new_alerts = [i for i in new if land_use_ok(i)]
+    for i in new:
+        d = days_until(i["sale_date"], today)
+        seen[i["id"]] = {
+            "sale_date": i["sale_date"],
+            "ok": land_use_ok(i),
+            "land_use": i.get("land_use"),
+            # a listing first found inside a reminder window already got the "new" alert
+            "reminded": [r for r in REMIND_DAYS if d is not None and d <= r],
+        }
 
+    # 2) Reminders: still-listed items (so cancelled sales drop out) whose sale is N days away
+    reminders: dict[int, list[dict]] = {r: [] for r in REMIND_DAYS}
+    for i in items:
+        st = seen.get(i["id"])
+        if not st or not st.get("ok") or i["id"] in {n["id"] for n in new}:
+            continue
+        st["sale_date"] = i["sale_date"]  # the sale may have been rescheduled
+        i["land_use"] = st.get("land_use")
+        d = days_until(i["sale_date"], today)
+        if d is None:
+            continue
+        # smallest window reached that hasn't been sent (a missed run still gets caught up)
+        due = [r for r in REMIND_DAYS if d <= r and r not in st["reminded"]]
+        if due:
+            reminders[min(due)].append(i)
+            st["reminded"] = sorted(set(st["reminded"]) | set(due), reverse=True)
+
+    print(f"{len(items)} matching, {len(new)} new, {len(new_alerts)} new alerts, "
+          + ", ".join(f"{len(v)} reminders at {k}d" for k, v in reminders.items()))
+
+    if new_alerts:
+        notify(new_alerts, f"🆕 {len(new_alerts)} new auction listing(s)", args.dry_run)
+    for r, group in sorted(reminders.items(), reverse=True):
+        if group:
+            when = "tomorrow" if r == 1 else f"in {r} days"
+            notify(group, f"⏰ {len(group)} auction(s) {when}", args.dry_run)
+
+    if not args.dry_run:
+        save_seen(seen)
 
 if __name__ == "__main__":
     main()
