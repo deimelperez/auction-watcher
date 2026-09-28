@@ -31,6 +31,7 @@ jobs:
           DAYS_AHEAD: "45"
           REMIND_DAYS: "7,1"            # reminders this many days before each sale
           LAND_USE_KEYWORDS: "VACANT+RESIDENTIAL"   # + means AND, comma means OR; empty = any
+          EXCLUDE_LAND_USE: "CONDOMINIUM,CONDO"   # never alert on these land uses
           MIN_LOT_SQFT: "5000"          # smallest lot to alert on; 0 = no minimum
           COMP_RADIUS_FT: "2640"        # comparable sales within half a mile (doubles if too few)
           COMP_YEARS: "3"               # sales from the last 3 years
