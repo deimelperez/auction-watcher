@@ -32,33 +32,14 @@ import requests
 # ----------------------------------------------------------------------------
 # CONFIG (environment variables)
 # ----------------------------------------------------------------------------
-# RealAuction sites, comma-separated, each as URL|AUCT_TYPE|REPORT_ID
-# (AUCT_TYPE 2 = tax deed; REPORT_ID = the quick-search page's Report_id).
+# RealAuction sites, comma-separated. Miami-Dade's tax deeds are on its realforeclose calendar.
 # Miami-Dade tax deeds are listed on its realforeclose site; Broward uses realtaxdeed.
 BASE_URLS = [u.strip().rstrip("/") for u in os.getenv(
-    "BASE_URL", "https://www.miamidade.realforeclose.com|2|33,https://broward.realtaxdeed.com|2|33").split(",") if u.strip()]
+    "BASE_URL", "https://www.miamidade.realforeclose.com,https://broward.realtaxdeed.com").split(",") if u.strip()]
 # The site's "quick search" report: FilterData sets the date range in the session, LoadData returns rows.
-# The quick-search page itself. Opening it registers a report id (REPID) in the session;
-# FilterData/LoadData only work with that id, otherwise the site answers "report expired".
-SEARCH_PAGE_PATH = os.getenv("SEARCH_PAGE_PATH", "/index.cfm?zaction=admin&zmethod=REPORT&Report_id={report_id}")
-FILTER_PATH = ("/index.cfm?&AUCT_TYPE={auct_type}&CaseNumber=&view_ssdate={start}&view_sedate={end}"
-               "&ParcelID=&PrimaryPlaintiffTD=&Address=&City=&Zip=&My_bids=null&CaseStatus=0,1,2,3,4,5,6"
-               "&zaction=AJAX&zmethod=COM&process=REPVIEW&FUNC=FilterData&SHOWJSON=false&REPID={repid}&_={ms}")
-LOAD_PATH = ("/index.cfm?zaction=AJAX&zmethod=COM&Process=REPVIEW&SHOWJSON=FALSE&REPID={repid}"
-             "&func=LoadData&page={page}&rows=100&_={ms}")
 # Links to open in your browser: the listing itself ({aid} = auction item id), and its sale-date page.
 DETAIL_PATH = os.getenv("DETAIL_PATH", "/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID={aid}&bypassPage=1")
 PREVIEW_PATH = "/index.cfm?zaction=AUCTION&Zmethod=PREVIEW&AUCTIONDATE={date}"
-# Optional login (your own bidder account) to use the quick-search report, which includes
-# each sale's status. Set RA_USER/RA_PASS as GitHub secrets; per-county overrides like
-# RA_USER_BROWARD/RA_PASS_BROWARD win if the county uses a different account.
-# Without them, the public calendar is used instead.
-def creds_for(county: str) -> tuple[str, str] | None:
-    u = os.getenv(f"RA_USER_{county.upper()}") or os.getenv("RA_USER", "")
-    p = os.getenv(f"RA_PASS_{county.upper()}") or os.getenv("RA_PASS", "")
-    return (u, p) if u and p else None
-
-
 # Public calendar + per-day listing (no login needed)
 CALENDAR_PATH = os.getenv("CALENDAR_PATH", "/index.cfm?zaction=USER&zmethod=CALENDAR")
 # How to ask the calendar for a given month ({m}, {y}); confirm from the site's "next month" link.
@@ -68,9 +49,6 @@ CALENDAR_MONTH_PARAM = os.getenv("CALENDAR_MONTH_PARAM",
 DAY_LOAD_PATH = ("/index.cfm?zaction=AUCTION&Zmethod=UPDATE&FNC=LOAD&AREA=W&PageDir={page_dir}"
                  "&doR=1&bypassPage=1&test=1&tx={ms}&_={ms}")
 
-# Report column positions (from the site's quick-search results)
-COL = {"sale_date": 0, "case": 2, "status": 3, "bid": 5, "assessed": 6,
-       "address": 9, "city": 10, "zip": 11, "parcel": 12}
 SKIP_STATUSES = {s.strip().upper() for s in os.getenv("SKIP_STATUSES", "CANCELED,CANCELLED").split(",") if s.strip()}
 MAX_PAGES = int(os.getenv("MAX_PAGES", "10"))
 DATE_FORMAT = os.getenv("DATE_FORMAT", "%m/%d/%Y")
@@ -228,143 +206,6 @@ def county_of(base: str) -> str:
     return host.split(".")[0].lower()
 
 
-def parse_report(text: str, base: str) -> tuple[list[dict], int]:
-    """Parse one page of the quick-search report. Returns (items, total_pages)."""
-    data = json.loads(text, strict=False)
-    err = ((data.get("userdata") or {}).get("errorMSG") or "").strip()
-    if err:
-        print(f"[warn] {county_of(base)}: site says: {err}", file=sys.stderr)
-    items = []
-    for row in data.get("rows") or []:
-        c = row.get("cell") or []
-        get = lambda k: (c[COL[k]] if COL[k] < len(c) else "") or ""
-        # skip anything that isn't a real listing (error rows, headers, blank rows)
-        if not re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", get("sale_date").strip()) or not get("case").strip():
-            print(f"[warn] {county_of(base)}: skipped odd row id={row.get('id')}: {c[:6]}", file=sys.stderr)
-            continue
-        zip5 = get("zip")[:5]
-        items.append({
-            "id": f"{county_of(base)}:{row.get('id')}",  # ids are per site, so prefix the county
-            "sale_date": get("sale_date").strip(),
-            "type": "TAXDEED",
-            "status": get("status").strip(),
-            "case": get("case").strip(),
-            "parcel": get("parcel").strip(),
-            "address": get("address").strip(),
-            "city": f"{get('city').strip().upper()}, FL- {zip5}".strip(", -"),
-            "zip": zip5 if zip5.isdigit() else "",
-            "bid": money(get("bid")),
-            "assessed": money(get("assessed")),
-            "county": county_of(base),
-            "aid": str(row.get("id")),
-            "link": base + DETAIL_PATH.format(aid=row.get("id")),
-            "day_link": base + PREVIEW_PATH.format(date=get("sale_date").strip()),
-            "raw": c,
-        })
-    try:
-        total = int(data.get("total") or 1)
-    except ValueError:
-        total = 1
-    return items, total
-
-
-def login(s: requests.Session, base: str, user: str, pw: str) -> bool:
-    """Log in the same way the site's login form does. Never logs the password or the full reply."""
-    r = s.post(base + "/index.cfm",
-               data={"ZACTION": "AJAX", "ZMETHOD": "LOGIN", "func": "LOGIN", "USERNAME": user, "USERPASS": pw},
-               timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
-    r.raise_for_status()
-    reply = re.sub(r"<[^>]+>", " ", r.text)
-    if re.search(r"invalid|incorrect|not found|locked|captcha|verif|fail", reply, re.I):
-        print(f"[warn] {county_of(base)}: login refused: {reply.strip()[:120]!r}", file=sys.stderr)
-        return False
-    return True
-
-
-# Notices that mean accepting terms are left for you to accept in the browser.
-TERMS_WORDS = re.compile(r"\bi agree\b|user agreement|terms (and|&) conditions|terms of (use|service)|"
-                         r"license agreement|agree to (be )?(legally )?bound", re.I)
-
-
-def find_notices(page_text: str) -> dict[str, str]:
-    """NID -> short notice text, from any page the site returns after login."""
-    found = {}
-    for m in re.finditer(r"\bNID\W{0,6}(?:value\W{0,3})?(\d{3,})|Notice\w*\(\s*['\"]?(\d{3,})", page_text, re.I):
-        nid = m.group(1) or m.group(2)
-        around = page_text[max(0, m.start() - 1500): m.end() + 1500]
-        text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", around)).strip()
-        found.setdefault(nid, text)
-    return found
-
-
-def accept_notices(s: requests.Session, base: str, pages: list[str]) -> bool:
-    """Acknowledge informational notices (like clicking OK). Returns False if a terms notice blocks us."""
-    county, handled = county_of(base), set()
-    for _ in range(5):  # accepting one can reveal the next
-        notices = {k: v for p in pages for k, v in find_notices(p).items() if k not in handled}
-        if not notices:
-            return True
-        for nid, text in notices.items():
-            handled.add(nid)
-            if TERMS_WORDS.search(text):
-                print(f"[warn] {county}: notice {nid} looks like terms to accept. Please log in and accept it "
-                      f"yourself in the browser; the script won't accept terms for you. ({text[:120]!r})",
-                      file=sys.stderr)
-                return False
-            time.sleep(1)
-            r = s.post(base + "/index.cfm", data={"zaction": "AJAX", "zmethod": "COM", "process": "NOTICE",
-                                                  "func": "ACCEPT", "showjson": "false", "NID": nid},
-                       timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
-            r.raise_for_status()
-            print(f"[notice] {county}: acknowledged notice {nid}")
-        time.sleep(2)
-        pages = [s.get(base + "/index.cfm", timeout=30).text]  # look again for any further notices
-    return True
-
-
-def fetch_report(s: requests.Session, base: str, auct_type: str, report_id: str) -> list[dict] | None:
-    """Quick-search report (needs login). Returns None if the site won't give us the report."""
-    county = county_of(base)
-    start, end = date.today(), date.today() + timedelta(days=DAYS_AHEAD)
-    fmt_d = lambda d: f"{d.month}/{d.day}/{d.year}"
-    time.sleep(2)
-    page = s.get(base + SEARCH_PAGE_PATH.format(report_id=report_id), timeout=30)
-    page.raise_for_status()
-    if find_notices(page.text):
-        if not accept_notices(s, base, [page.text]):
-            return None
-        time.sleep(2)
-        page = s.get(base + SEARCH_PAGE_PATH.format(report_id=report_id), timeout=30)
-        page.raise_for_status()
-    if re.search(r"type=.?password", page.text, re.I):
-        print(f"[warn] {county}: still seeing a login form after logging in", file=sys.stderr)
-        return None
-    m = re.search(r"REPID\W{0,5}(\d{6,})", page.text, re.I)
-    repid = m.group(1) if m else str(int(time.time() * 1000))  # the page's script may generate it
-    time.sleep(2)
-    f = s.get(base + FILTER_PATH.format(auct_type=auct_type, start=fmt_d(start), end=fmt_d(end),
-                                        repid=repid, ms=int(time.time() * 1000)),
-              timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
-    f.raise_for_status()
-    items, ids = [], set()
-    for pg in range(1, MAX_PAGES + 1):
-        time.sleep(2)
-        r = s.get(base + LOAD_PATH.format(repid=repid, page=pg, ms=int(time.time() * 1000)),
-                  timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
-        r.raise_for_status()
-        if "expired" in r.text.lower():
-            print(f"[warn] {county}: report expired even after login", file=sys.stderr)
-            return None
-        batch, total = parse_report(r.text, base)
-        new = [i for i in batch if i["id"] not in ids]
-        ids.update(i["id"] for i in new)
-        items.extend(new)
-        if not new or pg >= total:
-            break
-    print(f"[fetch] {county}: {len(items)} listings via quick search (logged in) {fmt_d(start)}-{fmt_d(end)}")
-    return items
-
-
 def calendar_day_wanted(box: str) -> bool:
     """Keep a calendar day if it has sales scheduled of a type we watch (tax deed by default)."""
     text = re.sub(r"<[^>]+>", " ", box).upper()
@@ -417,26 +258,12 @@ def auction_days(s: requests.Session, base: str) -> list[str]:
 
 
 def fetch_site(site: str) -> list[dict]:
-    base, auct_type, report_id = (site.split("|") + ["", ""])[:3]
-    base, auct_type, report_id = base.rstrip("/"), (auct_type or "2"), (report_id or "33")
+    base = site.split("|")[0].rstrip("/")
     county = county_of(base)
     s = requests.Session()
     s.headers.update(HEADERS)
     s.get(base, timeout=30).raise_for_status()  # session cookies
 
-    creds = creds_for(county)
-    if creds:
-        try:
-            if login(s, base, *creds) and accept_notices(s, base, [s.get(base + "/index.cfm", timeout=30).text]):
-                items = fetch_report(s, base, auct_type, report_id)
-                if items is not None:
-                    return items
-        except Exception as e:
-            print(f"[warn] {county}: logged-in search failed ({type(e).__name__})", file=sys.stderr)
-        print(f"[fetch] {county}: falling back to the public calendar")
-        s = requests.Session()
-        s.headers.update(HEADERS)
-        s.get(base, timeout=30).raise_for_status()
     items, ids = [], set()
     for ds in auction_days(s, base):
         try:
@@ -896,11 +723,7 @@ def main() -> None:
         return
 
     if args.sample:
-        text = Path(args.sample).read_text()
-        if '"rows"' in text:
-            items, _ = parse_report(text, "https://sample.local")
-        else:
-            items = parse_response(text, "sample")
+        items = parse_response(Path(args.sample).read_text(), "sample")
         for i in items:
             print(json.dumps({k: v for k, v in i.items() if k != "raw"}), "KEEP" if keep(i) else "skip")
         return
