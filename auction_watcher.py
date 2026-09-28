@@ -32,7 +32,7 @@ import requests
 # ----------------------------------------------------------------------------
 # One or more RealAuction sites, comma-separated. Tax deeds by default; add
 # https://www.miamidade.realforeclose.com to also watch foreclosure sales.
-BASE_URLS = [u.strip().rstrip("/") for u in os.getenv("BASE_URL", "https://www.miamidade.realtaxdeed.com").split(",") if u.strip()]
+BASE_URLS = [u.strip().rstrip("/") for u in os.getenv("BASE_URL", "https://miamidade.realtaxdeed.com").split(",") if u.strip()]
 # How the site works: opening a sale date's PREVIEW page stores that date in the
 # session, then the LOAD call returns that date's items (the date is not in the LOAD URL).
 PREVIEW_PATH = os.getenv("PREVIEW_PATH", "/index.cfm?zaction=AUCTION&Zmethod=PREVIEW&AUCTIONDATE={date}")
@@ -183,7 +183,11 @@ def fetch_all() -> list[dict]:
     for base in BASE_URLS:
         s = requests.Session()
         s.headers.update(HEADERS)
-        s.get(base, timeout=30)  # session cookies
+        try:
+            s.get(base, timeout=30).raise_for_status()  # session cookies
+        except Exception as e:  # one unreachable site shouldn't stop the others
+            print(f"[error] {base}: {e}", file=sys.stderr)
+            continue
         for d in sale_dates(DAYS_AHEAD):
             ds = d.strftime(DATE_FORMAT)
             try:
