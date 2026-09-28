@@ -1,21 +1,4 @@
 {
- "_tg": {
-  "messages": {
-   "8": {
-    "blocks": {
-     "broward:1": "<b>Error \u00b7 BROWARD \u00b7 #</b>\nno address, FL\nOpening bid <b>n/a</b> \u00b7 parcel <code></code>\n<i>no street address (often vacant land)</i>\n<a href=\"https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&amp;Zmethod=DETAILS&amp;AID=1&amp;bypassPage=1\">Listing</a> | <a href=\"https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&amp;Zmethod=PREVIEW&amp;AUCTIONDATE=Error\">Sale day</a>",
-     "miamidade:1": "<b>Error \u00b7 MIAMIDADE \u00b7 #</b>\nno address, FL\nOpening bid <b>n/a</b> \u00b7 parcel <code></code>\n<i>no street address (often vacant land)</i>\n<a href=\"https://www.miamidade.realforeclose.com/index.cfm?zaction=AUCTION&amp;Zmethod=DETAILS&amp;AID=1&amp;bypassPage=1\">Listing</a> | <a href=\"https://www.miamidade.realforeclose.com/index.cfm?zaction=AUCTION&amp;Zmethod=PREVIEW&amp;AUCTIONDATE=Error\">Sale day</a>"
-    },
-    "date": "2026-09-28",
-    "items": [
-     "miamidade:1",
-     "broward:1"
-    ],
-    "subject": "\ud83c\udd95 2 new auction listing(s)"
-   }
-  },
-  "offset": 413595581
- },
  "broward:1": {
   "dismissed": true,
   "land_use": null,
