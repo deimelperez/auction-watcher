@@ -25,6 +25,7 @@ jobs:
           MAX_BID: "25000"
           ZIPS: ""
           DAYS_AHEAD: "45"
+          REMIND_DAYS: "7,1"            # reminders this many days before each sale
           LAND_USE_KEYWORDS: "VACANT"   # empty = alert on any land use
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
