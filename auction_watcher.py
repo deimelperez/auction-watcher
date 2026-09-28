@@ -108,6 +108,8 @@ LAND_USE_KEYWORDS = [
     [w.strip().upper() for w in k.split("+") if w.strip()]
     for k in os.getenv("LAND_USE_KEYWORDS", "VACANT+RESIDENTIAL").split(",") if k.strip()
 ]
+# Never alert on these land uses (matched anywhere in the land-use description).
+EXCLUDE_LAND_USE = [k.strip().upper() for k in os.getenv("EXCLUDE_LAND_USE", "CONDOMINIUM,CONDO").split(",") if k.strip()]
 # Minimum lot size in square feet (0 = no minimum). Screens out slivers and too-small lots.
 MIN_LOT_SQFT = float(os.getenv("MIN_LOT_SQFT", "5000") or 0)
 # Florida East State Plane (US survey feet), so geometry areas come back in sq ft.
@@ -564,6 +566,8 @@ def land_use_ok(item: dict) -> bool:
     if not lu:
         return True
     desc = (lu.get("desc") or "").upper()
+    if any(x in desc for x in EXCLUDE_LAND_USE):
+        return False
     if LAND_USE_KEYWORDS and desc and not any(all(w in desc for w in group) for group in LAND_USE_KEYWORDS):
         return False
     sqft = lu.get("lot_sqft")
@@ -656,8 +660,8 @@ def links_of(item: dict) -> list[tuple[str, str]]:
     if item.get("day_link"):
         out.append(("Sale day", item["day_link"]))
     if item.get("county", "miamidade") == "miamidade":
-        if folio_of(item):
-            out.append(("Property", "https://apps.miamidadepa.gov/PropertySearch/"))
+        if folio := folio_of(item):
+            out.append(("Property", f"https://apps.miamidadepa.gov/propertysearch/#/?folio={folio}"))
     elif item.get("county") == "broward" and item["parcel"] and not item["parcel"].upper().startswith("MULTIPLE"):
         out.append(("Property", "https://web.bcpa.net/BcpaClient/"))
     return out
