@@ -61,6 +61,10 @@ def creds_for(county: str) -> tuple[str, str] | None:
 
 # Public calendar + per-day listing (no login needed)
 CALENDAR_PATH = os.getenv("CALENDAR_PATH", "/index.cfm?zaction=USER&zmethod=CALENDAR")
+# How to ask the calendar for a given month ({m}, {y}); confirm from the site's "next month" link.
+# The site's own "next month" link uses a ColdFusion timestamp: selCalDate={ts '2026-10-01 00:00:00'}
+CALENDAR_MONTH_PARAM = os.getenv("CALENDAR_MONTH_PARAM",
+                                 "&selCalDate=%7Bts%20%27{y}%2D{m:02d}%2D01%2000%3A00%3A00%27%7D")
 DAY_LOAD_PATH = ("/index.cfm?zaction=AUCTION&Zmethod=UPDATE&FNC=LOAD&AREA=W&PageDir={page_dir}"
                  "&doR=1&bypassPage=1&test=1&tx={ms}&_={ms}")
 
@@ -386,8 +390,12 @@ def auction_days(s: requests.Session, base: str) -> list[str]:
         while d <= end:
             months.add((d.year, d.month)); d += timedelta(days=28)
         for y, m in sorted(months):
-            r = s.get(base + CALENDAR_PATH + f"&selCalDate={m}/1/{y}", timeout=30)
+            r = s.get(base + CALENDAR_PATH + CALENDAR_MONTH_PARAM.format(m=m, y=y), timeout=30)
             r.raise_for_status()
+            shown = {(int(y2), int(m2)) for m2, _, y2 in re.findall(r'dayid="(\d{2})/(\d{2})/(\d{4})"', r.text)}
+            if shown and (y, m) not in shown:
+                print(f"[warn] {county_of(base)}: asked the calendar for {m}/{y} but it showed "
+                      f"{sorted(shown)}; the month parameter isn't right yet", file=sys.stderr)
             # each day: <div class="CALBOX ..." dayid="09/01/2026"> ... Foreclosure ... CALSCH">4</span> FC ...</div>
             for ds, box in re.findall(r'dayid="(\d{2}/\d{2}/\d{4})"(.*?)</div>', r.text, re.I | re.S):
                 try:
