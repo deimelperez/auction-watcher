@@ -19,14 +19,15 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Run watcher
         env:
-          # add ,https://www.miamidade.realforeclose.com to also watch foreclosures
-          BASE_URL: https://miamidade.realtaxdeed.com
+          # comma-separated; add https://www.miamidade.realforeclose.com to also watch foreclosures
+          BASE_URL: "https://miamidade.realtaxdeed.com,https://broward.realtaxdeed.com"
           AUCTION_TYPES: TAXDEED
           MAX_BID: "25000"
           ZIPS: ""
           DAYS_AHEAD: "45"
           REMIND_DAYS: "7,1"            # reminders this many days before each sale
-          LAND_USE_KEYWORDS: "VACANT"   # empty = alert on any land use
+          LAND_USE_KEYWORDS: "VACANT+RESIDENTIAL"   # + means AND, comma means OR; empty = any
+          MIN_LOT_SQFT: "5000"          # smallest lot to alert on; 0 = no minimum
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
