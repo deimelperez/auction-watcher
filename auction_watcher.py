@@ -32,17 +32,23 @@ import requests
 # ----------------------------------------------------------------------------
 # CONFIG (environment variables)
 # ----------------------------------------------------------------------------
-# One or more RealAuction sites, comma-separated. Tax deeds by default; add
-# https://www.miamidade.realforeclose.com to also watch foreclosure sales.
+# RealAuction sites, comma-separated, each as URL|AUCT_TYPE (2 = tax deed).
+# Miami-Dade tax deeds are listed on its realforeclose site; Broward uses realtaxdeed.
 BASE_URLS = [u.strip().rstrip("/") for u in os.getenv(
-    "BASE_URL", "https://miamidade.realtaxdeed.com,https://broward.realtaxdeed.com").split(",") if u.strip()]
-# How the site works: opening a sale date's PREVIEW page stores that date in the
-# session, then the LOAD call returns that date's items (the date is not in the LOAD URL).
-PREVIEW_PATH = os.getenv("PREVIEW_PATH", "/index.cfm?zaction=AUCTION&Zmethod=PREVIEW&AUCTIONDATE={date}")
-LOAD_PATH = os.getenv(
-    "LOAD_PATH",
-    "/index.cfm?zaction=AUCTION&Zmethod=UPDATE&FNC=LOAD&AREA=W&PageDir={page_dir}&doR=1&bypassPage=1&test=1",
-)
+    "BASE_URL", "https://www.miamidade.realforeclose.com|2,https://broward.realtaxdeed.com|2").split(",") if u.strip()]
+# The site's "quick search" report: FilterData sets the date range in the session, LoadData returns rows.
+FILTER_PATH = ("/index.cfm?&AUCT_TYPE={auct_type}&CaseNumber=&view_ssdate={start}&view_sedate={end}"
+               "&ParcelID=&PrimaryPlaintiffTD=&Address=&City=&Zip=&My_bids=null&CaseStatus=0,1,2,3,4,5,6"
+               "&zaction=AJAX&zmethod=COM&process=REPVIEW&FUNC=FilterData&SHOWJSON=false&REPID={repid}&_={ms}")
+LOAD_PATH = ("/index.cfm?zaction=AJAX&zmethod=COM&Process=REPVIEW&SHOWJSON=FALSE&REPID={repid}"
+             "&func=LoadData&page={page}&rows=100&_={ms}")
+# Links to open in your browser: the listing itself ({aid} = auction item id), and its sale-date page.
+DETAIL_PATH = os.getenv("DETAIL_PATH", "/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID={aid}&bypassPage=1")
+PREVIEW_PATH = "/index.cfm?zaction=AUCTION&Zmethod=PREVIEW&AUCTIONDATE={date}"
+# Report column positions (from the site's quick-search results)
+COL = {"sale_date": 0, "case": 2, "status": 3, "bid": 5, "assessed": 6,
+       "address": 9, "city": 10, "zip": 11, "parcel": 12}
+SKIP_STATUSES = {s.strip().upper() for s in os.getenv("SKIP_STATUSES", "CANCELED,CANCELLED").split(",") if s.strip()}
 MAX_PAGES = int(os.getenv("MAX_PAGES", "10"))
 DATE_FORMAT = os.getenv("DATE_FORMAT", "%m/%d/%Y")
 DAYS_AHEAD = int(os.getenv("DAYS_AHEAD", "45"))
@@ -81,6 +87,12 @@ DOR_CODES = {
     4: "CONDOMINIUM", 5: "COOPERATIVES", 8: "MULTI-FAMILY <10 UNITS", 9: "RESIDENTIAL COMMON AREAS",
     10: "VACANT COMMERCIAL", 40: "VACANT INDUSTRIAL", 70: "VACANT INSTITUTIONAL", 80: "VACANT GOVERNMENTAL",
 }
+
+# Comparable sales (from the statewide layer): vacant residential lots sold nearby.
+COMP_RADIUS_FT = float(os.getenv("COMP_RADIUS_FT", "2640"))   # half a mile
+COMP_YEARS = int(os.getenv("COMP_YEARS", "3"))                 # sales in the last N years
+COMP_MIN = int(os.getenv("COMP_MIN", "3"))                     # widen to 2x radius if fewer found
+COMP_MIN_PRICE = float(os.getenv("COMP_MIN_PRICE", "5000"))    # ignore token/family transfers
 
 # Comma = OR, plus = AND. Default: vacant land zoned/used residential (i.e. land to build a house on).
 LAND_USE_KEYWORDS = [
@@ -191,47 +203,76 @@ def county_of(base: str) -> str:
     return host.split(".")[0].lower()
 
 
-def load_date(s: requests.Session, base: str, ds: str) -> list[dict]:
-    """Open the preview page for one sale date, then pull its items page by page."""
-    s.get(base + PREVIEW_PATH.format(date=ds), timeout=30).raise_for_status()
-    items, seen_ids = [], set()
-    for page in range(MAX_PAGES):
-        ms = int(time.time() * 1000)
-        url = base + LOAD_PATH.format(page_dir=0 if page == 0 else 1) + f"&tx={ms}&_={ms}"
-        r = s.get(url, timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
-        r.raise_for_status()
-        if '"retHTML"' not in r.text:
-            break
-        batch = [i for i in parse_response(r.text, ds) if i["id"] not in seen_ids]
-        for i in batch:
-            i["county"] = county_of(base)
-            i["link"] = base + PREVIEW_PATH.format(date=ds)
-        if not batch:  # empty day, or the "next page" returned what we already have
-            break
-        seen_ids.update(i["id"] for i in batch)
-        items.extend(batch)
+def parse_report(text: str, base: str) -> tuple[list[dict], int]:
+    """Parse one page of the quick-search report. Returns (items, total_pages)."""
+    data = json.loads(text, strict=False)
+    items = []
+    for row in data.get("rows") or []:
+        c = row.get("cell") or []
+        get = lambda k: (c[COL[k]] if COL[k] < len(c) else "") or ""
+        zip5 = get("zip")[:5]
+        items.append({
+            "id": f"{county_of(base)}:{row.get('id')}",  # ids are per site, so prefix the county
+            "sale_date": get("sale_date").strip(),
+            "type": "TAXDEED",
+            "status": get("status").strip(),
+            "case": get("case").strip(),
+            "parcel": get("parcel").strip(),
+            "address": get("address").strip(),
+            "city": f"{get('city').strip().upper()}, FL- {zip5}".strip(", -"),
+            "zip": zip5 if zip5.isdigit() else "",
+            "bid": money(get("bid")),
+            "assessed": money(get("assessed")),
+            "county": county_of(base),
+            "aid": str(row.get("id")),
+            "link": base + DETAIL_PATH.format(aid=row.get("id")),
+            "day_link": base + PREVIEW_PATH.format(date=get("sale_date").strip()),
+            "raw": c,
+        })
+    try:
+        total = int(data.get("total") or 1)
+    except ValueError:
+        total = 1
+    return items, total
+
+
+def fetch_site(site: str) -> list[dict]:
+    base, _, auct_type = site.partition("|")
+    base, auct_type = base.rstrip("/"), (auct_type or "2")
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    s.get(base, timeout=30).raise_for_status()  # session cookies
+    start, end = date.today(), date.today() + timedelta(days=DAYS_AHEAD)
+    fmt_d = lambda d: f"{d.month}/{d.day}/{d.year}"
+    repid = ms = int(time.time() * 1000)
+    s.get(base + FILTER_PATH.format(auct_type=auct_type, start=fmt_d(start), end=fmt_d(end), repid=repid, ms=ms),
+          timeout=30, headers={"X-Requested-With": "XMLHttpRequest"}).raise_for_status()
+    items, ids = [], set()
+    for page in range(1, MAX_PAGES + 1):
         time.sleep(2)
+        r = s.get(base + LOAD_PATH.format(repid=repid, page=page, ms=int(time.time() * 1000)),
+                  timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
+        r.raise_for_status()
+        batch, total = parse_report(r.text, base)
+        new = [i for i in batch if i["id"] not in ids]
+        ids.update(i["id"] for i in new)
+        items.extend(new)
+        if not new or page >= total:
+            break
+    print(f"[fetch] {county_of(base)}: {len(items)} listings {fmt_d(start)}-{fmt_d(end)}")
     return items
 
 
 def fetch_all() -> list[dict]:
     items = []
-    for base in BASE_URLS:
-        s = requests.Session()
-        s.headers.update(HEADERS)
+    for site in BASE_URLS:
         try:
-            s.get(base, timeout=30).raise_for_status()  # session cookies
+            items.extend(fetch_site(site))
         except Exception as e:  # one unreachable site shouldn't stop the others
-            print(f"[error] {base}: {e}", file=sys.stderr)
-            continue
-        for d in sale_dates(DAYS_AHEAD):
-            ds = d.strftime(DATE_FORMAT)
-            try:
-                items.extend(load_date(s, base, ds))
-            except Exception as e:  # one bad date shouldn't kill the run
-                print(f"[warn] {base} {ds}: {e}", file=sys.stderr)
-            time.sleep(2)  # be polite
-    return items
+            print(f"[error] {site}: {e}", file=sys.stderr)
+    active = [i for i in items if i.get("status", "").upper() not in SKIP_STATUSES]
+    print(f"[fetch] {len(items)} total, {len(items) - len(active)} skipped (canceled)")
+    return active
 
 
 # ----------------------------------------------------------------------------
@@ -259,6 +300,7 @@ def lookup_land_use(session: requests.Session, folio: str) -> dict | None:
         return None
     attrs = dict(feats[0].get("attributes") or {})
     attrs["_geom_sqft"] = polygon_area(feats[0].get("geometry") or {})
+    attrs["_centroid"] = centroid(feats[0].get("geometry") or {})
     return attrs
 
 
@@ -300,6 +342,8 @@ def lookup_statewide(session: requests.Session, county: str, parcel: str) -> dic
         "TOTAL_VAL_CUR": a.get("JV"),
         "LND_SQFOOT": a.get("LND_SQFOOT"),  # land sq ft, if the layer carries it
         "_geom_sqft": polygon_area(feats[0].get("geometry") or {}),
+        "_centroid": centroid(feats[0].get("geometry") or {}),
+        "_pid": a.get("PARCEL_ID"),
     }
 
 
@@ -316,6 +360,15 @@ def polygon_area(geom: dict) -> float | None:
     return abs(total) or None
 
 
+def centroid(geom: dict) -> tuple[float, float] | None:
+    """Rough centre of a parcel (average of its outer ring's vertices); fine for a radius search."""
+    rings = geom.get("rings") or []
+    if not rings or not rings[0]:
+        return None
+    pts = rings[0][:-1] if rings[0][0] == rings[0][-1] else rings[0]
+    return sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+
+
 def lot_sqft(attrs: dict) -> tuple[float | None, str]:
     """Lot size in sq ft: a lot-size field if the layer has one, else the parcel polygon's area."""
     for k, v in attrs.items():
@@ -328,6 +381,61 @@ def lot_sqft(attrs: dict) -> tuple[float | None, str]:
             return float(v), k
     g = attrs.get("_geom_sqft")
     return (g, "parcel shape") if g else (None, "")
+
+
+def query_statewide(session: requests.Session, wheres: list[str], extra: dict) -> list[dict]:
+    """Try WHERE variants (numeric vs text fields differ between layers) until one is accepted."""
+    last_err = None
+    for where in wheres:
+        r = session.get(f"{STATEWIDE_LAYER_URL}/query",
+                        params={"where": where, "outFields": "*", "f": "json", **extra}, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        if "error" in data:
+            last_err = data["error"]
+            continue
+        return data.get("features") or []
+    raise RuntimeError(last_err)
+
+
+def find_comps(session: requests.Session, county: str, xy: tuple[float, float], exclude_pid: str = "") -> dict | None:
+    """Vacant residential lots sold near a point. Returns a summary with median $/sq ft."""
+    co = FDOR_COUNTY_NO.get(county)
+    if co is None or not xy:
+        return None
+    since = date.today().year - COMP_YEARS + 1
+    wheres = [
+        f"{c} AND {u} AND SALE_YR1 >= {since} AND SALE_PRC1 >= {COMP_MIN_PRICE:.0f}"
+        for c in (f"CO_NO={co}", f"CO_NO='{co}'")
+        for u in ("DOR_UC IN ('000','00','0')", "DOR_UC=0")
+    ]
+    for radius in (COMP_RADIUS_FT, COMP_RADIUS_FT * 2):
+        feats = query_statewide(session, wheres, {
+            "geometry": f"{xy[0]},{xy[1]}", "geometryType": "esriGeometryPoint", "inSR": AREA_SR,
+            "distance": radius, "units": "esriSRUnit_Foot", "spatialRel": "esriSpatialRelIntersects",
+            "returnGeometry": "true", "outSR": AREA_SR,
+        })
+        sales = []
+        for f in feats:
+            a = f.get("attributes") or {}
+            if exclude_pid and re.sub(r"[^0-9A-Za-z]", "", str(a.get("PARCEL_ID"))).upper() == exclude_pid.upper():
+                continue
+            price = a.get("SALE_PRC1") or 0
+            if price < COMP_MIN_PRICE:
+                continue
+            sqft = a.get("LND_SQFOOT") or polygon_area(f.get("geometry") or {})
+            if price and sqft and sqft > 500:
+                sales.append({"price": float(price), "sqft": float(sqft), "ppsf": float(price) / float(sqft),
+                              "year": a.get("SALE_YR1"), "month": a.get("SALE_MO1")})
+        if len(sales) >= COMP_MIN or radius != COMP_RADIUS_FT:
+            break
+    if not sales:
+        return {"n": 0, "radius_ft": radius}
+    ppsf = sorted(x["ppsf"] for x in sales)
+    mid = len(ppsf) // 2
+    median = ppsf[mid] if len(ppsf) % 2 else (ppsf[mid - 1] + ppsf[mid]) / 2
+    return {"n": len(sales), "radius_ft": radius, "median_ppsf": round(median, 2),
+            "low_ppsf": round(ppsf[0], 2), "high_ppsf": round(ppsf[-1], 2)}
 
 
 def enrich(items: list[dict]) -> None:
@@ -364,6 +472,12 @@ def enrich(items: list[dict]) -> None:
                 "lot_sqft": round(sqft) if sqft else None,
                 "lot_src": src,
             }
+            # comparable sales only for lots that pass the filter (keeps requests low)
+            if land_use_ok(item):
+                try:
+                    item["land_use"]["comps"] = find_comps(s, county, a.get("_centroid"), a.get("_pid") or folio)
+                except Exception as e:
+                    print(f"[warn] comps {county} {folio}: {e}", file=sys.stderr)
             # shows in the Actions log so you can see the county's real descriptions
             print(f"[land use] {county} {folio}: {item['land_use']['code']} {item['land_use']['desc']!r}, "
                   f"lot {item['land_use']['lot_sqft']} sq ft ({src or 'unknown'})")
@@ -401,7 +515,8 @@ def load_seen() -> dict:
 def save_seen(seen: dict) -> None:
     today = date.today()
     # drop items whose sale date has passed so the file doesn't grow forever
-    keep_ = {k: v for k, v in seen.items() if (days_until(v.get("sale_date", ""), today) or 0) >= 0}
+    keep_ = {k: v for k, v in seen.items()
+             if k.startswith("_") or (days_until(v.get("sale_date", ""), today) or 0) >= 0}
     SEEN_FILE.write_text(json.dumps(keep_, indent=1, sort_keys=True))
 
 
@@ -416,7 +531,8 @@ def fmt(item: dict) -> str:
     bid = f"${item['bid']:,.2f}" if item["bid"] is not None else "n/a"
     assessed = f"${item['assessed']:,.0f}" if item["assessed"] is not None else "n/a"
     lines = [
-        f"{item['sale_date']}  {item.get('county', '').upper()}  {item['type']}  #{item['case']}",
+        f"{item['sale_date']}  {item.get('county', '').upper()}  {item['type']}  #{item['case']}"
+        + (f"  [{item['status']}]" if item.get("status") else ""),
         f"Parcel: {item['parcel']}",
         f"Address: {item['address'] or '(none)'} {item['city']}".rstrip(),
         f"Bid: {bid}   Assessed: {assessed}",
@@ -436,16 +552,149 @@ def fmt(item: dict) -> str:
             lines.append("PA values: " + ", ".join(vals))
     elif folio_of(item):
         lines.append("Land use: not found, check manually")
+    comps = (lu or {}).get("comps")
+    if comps is not None:
+        miles = comps["radius_ft"] / 5280
+        if comps["n"]:
+            line = (f"Comps: {comps['n']} vacant residential sales within {miles:.1f} mi "
+                    f"(last {COMP_YEARS}y): median ${comps['median_ppsf']:,.2f}/sq ft "
+                    f"(${comps['low_ppsf']:,.2f}-${comps['high_ppsf']:,.2f})")
+            lines.append(line)
+            if lu.get("lot_sqft"):
+                est = comps["median_ppsf"] * lu["lot_sqft"]
+                pct = f", bid = {item['bid'] / est:.0%} of that" if item.get("bid") and est else ""
+                lines.append(f"Est. land value ≈ ${est:,.0f}{pct}")
+        else:
+            lines.append(f"Comps: no vacant residential sales within {miles:.1f} mi in the last {COMP_YEARS}y")
     if t := tags(item):
         lines.append("Note: " + "; ".join(t))
-    if item.get("link"):
-        lines.append(f"Auction: {item['link']}")
-    if item.get("county", "miamidade") == "miamidade":
-        if folio := folio_of(item):
-            lines.append(f"Property Search (folio {folio}): https://apps.miamidadepa.gov/PropertySearch/")
-    elif item.get("county") == "broward" and item["parcel"] and not item["parcel"].upper().startswith("MULTIPLE"):
-        lines.append(f"Property Search (parcel {item['parcel']}): https://web.bcpa.net/BcpaClient/")
+    for name, url in links_of(item):
+        lines.append(f"{name}: {url}")
     return "\n".join(lines)
+
+
+def links_of(item: dict) -> list[tuple[str, str]]:
+    out = []
+    if item.get("link"):
+        out.append(("Listing", item["link"]))
+    if item.get("day_link"):
+        out.append(("Sale day", item["day_link"]))
+    if item.get("county", "miamidade") == "miamidade":
+        if folio_of(item):
+            out.append(("Property", "https://apps.miamidadepa.gov/PropertySearch/"))
+    elif item.get("county") == "broward" and item["parcel"] and not item["parcel"].upper().startswith("MULTIPLE"):
+        out.append(("Property", "https://web.bcpa.net/BcpaClient/"))
+    return out
+
+
+def fmt_html(item: dict) -> str:
+    """Compact Telegram version of one listing (HTML)."""
+    e = html.escape
+    lu = item.get("land_use") or {}
+    head = f"<b>{e(item['sale_date'][:5])} · {e(item.get('county', '').upper())} · #{e(item['case'])}</b>"
+    addr = f"{item['address'] or 'no address'}, {item['city']}".strip(", ")
+    bid = f"${item['bid']:,.0f}" if item.get("bid") is not None else "n/a"
+    lines = [head, e(addr), f"Opening bid <b>{bid}</b> · parcel <code>{e(item['parcel'])}</code>"]
+    bits = []
+    if lu.get("desc"):
+        bits.append(e(lu["desc"].title()))
+    if lu.get("lot_sqft"):
+        bits.append(f"{lu['lot_sqft']:,} sq ft")
+    if bits:
+        lines.append(" · ".join(bits))
+    c = lu.get("comps")
+    if c and c.get("n") and lu.get("lot_sqft"):
+        est = c["median_ppsf"] * lu["lot_sqft"]
+        pct = f" (bid {item['bid'] / est:.0%})" if item.get("bid") and est else ""
+        lines.append(f"Comps: {c['n']} sales, ${c['median_ppsf']:,.2f}/sq ft → ≈${est:,.0f}{pct}")
+    elif c is not None and not c.get("n"):
+        lines.append("Comps: none nearby")
+    if t := tags(item):
+        lines.append("<i>" + e("; ".join(t)) + "</i>")
+    ls = links_of(item)
+    if ls:
+        lines.append(" | ".join(f'<a href="{e(u, quote=True)}">{e(n)}</a>' for n, u in ls))
+    return "\n".join(lines)
+
+
+def tg(method: str, **payload) -> dict:
+    r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}", json=payload, timeout=30)
+    data = r.json()
+    if not data.get("ok"):
+        raise RuntimeError(f"Telegram {method}: {data.get('description')}")
+    return data.get("result")
+
+
+def render_list(msg: dict, seen: dict) -> tuple[str, dict]:
+    """Text + buttons for one checklist message; crossed-out items are struck through."""
+    parts, buttons = [f"<b>{html.escape(msg['subject'])}</b>"], []
+    for n, iid in enumerate(msg["items"], 1):
+        crossed = seen.get(iid, {}).get("dismissed")
+        block = msg["blocks"][iid]
+        parts.append(f"❌ <s>{n}. {block}</s>" if crossed else f"☐ {n}. {block}")
+        buttons.append({"text": f"↩️ {n}" if crossed else f"❌ {n}", "callback_data": f"x:{iid}"})
+    rows = [buttons[i:i + 5] for i in range(0, len(buttons), 5)]
+    return "\n\n".join(parts), {"inline_keyboard": rows}
+
+
+def send_telegram_list(items: list[dict], subject: str, seen: dict) -> None:
+    """Send listings as a numbered checklist; tap ❌ n to cross one out (no more reminders for it)."""
+    meta = seen.setdefault("_tg", {"offset": 0, "messages": {}})
+    blocks = {i["id"]: fmt_html(i) for i in items}
+    chunk, size, chunks = [], 0, []
+    for i in items:  # keep each message under Telegram's 4096-char limit
+        n = len(blocks[i["id"]]) + 20
+        if chunk and (size + n > 3500 or len(chunk) >= 10):
+            chunks.append(chunk); chunk, size = [], 0
+        chunk.append(i["id"]); size += n
+    if chunk:
+        chunks.append(chunk)
+    for k, ids in enumerate(chunks, 1):
+        subj = subject + (f" ({k}/{len(chunks)})" if len(chunks) > 1 else "")
+        msg = {"subject": subj, "items": ids, "blocks": {i: blocks[i] for i in ids}, "date": date.today().isoformat()}
+        text, kb = render_list(msg, seen)
+        res = tg("sendMessage", chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="HTML",
+                 disable_web_page_preview=True, reply_markup=kb)
+        meta["messages"][str(res["message_id"])] = msg
+
+
+def sync_telegram(seen: dict) -> int:
+    """Apply ❌ taps: mark items dismissed/undismissed and strike them through. Returns taps handled."""
+    if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
+        return 0
+    meta = seen.setdefault("_tg", {"offset": 0, "messages": {}})
+    updates = tg("getUpdates", offset=meta.get("offset", 0), timeout=0, allowed_updates=["callback_query"])
+    touched, handled = set(), 0
+    for u in updates:
+        meta["offset"] = u["update_id"] + 1
+        cq = u.get("callback_query") or {}
+        data, m = cq.get("data") or "", cq.get("message") or {}
+        if str((m.get("chat") or {}).get("id")) != str(TELEGRAM_CHAT_ID) or not data.startswith("x:"):
+            continue
+        iid = data[2:]
+        if iid in seen:
+            seen[iid]["dismissed"] = not seen[iid].get("dismissed")
+            touched.add(str(m.get("message_id")))
+            handled += 1
+        try:
+            tg("answerCallbackQuery", callback_query_id=cq["id"], text="Updated")
+        except Exception:
+            pass  # taps older than a few minutes can't be answered; the edit below still works
+    # re-render every message that shows a tapped item (it may appear in several messages)
+    changed = {iid for mid in touched for iid in meta["messages"].get(mid, {}).get("items", [])}
+    for mid, msg in meta["messages"].items():
+        if mid in touched or changed & set(msg["items"]):
+            text, kb = render_list(msg, seen)
+            try:
+                tg("editMessageText", chat_id=TELEGRAM_CHAT_ID, message_id=int(mid), text=text,
+                   parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb)
+            except Exception as e:
+                if "not modified" not in str(e):
+                    print(f"[warn] edit {mid}: {e}", file=sys.stderr)
+    # forget messages older than 90 days
+    cutoff = (date.today() - timedelta(days=90)).isoformat()
+    meta["messages"] = {k: v for k, v in meta["messages"].items() if v.get("date", "") >= cutoff}
+    return handled
 
 
 def send_telegram(text: str) -> None:
@@ -466,13 +715,13 @@ def send_email(subject: str, text: str) -> None:
         smtp.send_message(msg)
 
 
-def notify(items: list[dict], subject: str, dry_run: bool) -> None:
+def notify(items: list[dict], subject: str, dry_run: bool, seen: dict | None = None) -> None:
     body = "\n\n".join(fmt(i) for i in items)
     if dry_run or not (TELEGRAM_TOKEN or SMTP_USER):
         print(f"--- {subject} ---\n{body}")
         return
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        send_telegram(f"{subject}\n\n{body}")
+        send_telegram_list(items, subject, seen if seen is not None else {})
     if SMTP_USER and SMTP_PASS:
         send_email(subject, body)
 
@@ -483,7 +732,16 @@ def main() -> None:
     ap.add_argument("--sample", help="parse a saved JSON response instead of fetching")
     ap.add_argument("--dry-run", action="store_true", help="print alerts instead of sending")
     ap.add_argument("--folio", help="test the land-use lookup for one folio and exit")
+    ap.add_argument("--sync", action="store_true", help="only apply Telegram ❌ taps (runs hourly)")
     args = ap.parse_args()
+
+    if args.sync:
+        seen = load_seen()
+        n = sync_telegram(seen)
+        print(f"[sync] {n} tap(s) applied")
+        if n:
+            save_seen(seen)
+        return
 
     if args.folio:
         s = requests.Session()
@@ -493,7 +751,11 @@ def main() -> None:
         return
 
     if args.sample:
-        items = parse_response(Path(args.sample).read_text(), "sample")
+        text = Path(args.sample).read_text()
+        if '"rows"' in text:
+            items, _ = parse_report(text, "https://sample.local")
+        else:
+            items = parse_response(text, "sample")
         for i in items:
             print(json.dumps({k: v for k, v in i.items() if k != "raw"}), "KEEP" if keep(i) else "skip")
         return
@@ -501,6 +763,11 @@ def main() -> None:
     items = [i for i in fetch_all() if keep(i)]
     seen = load_seen()
     today = date.today()
+    if not args.dry_run:
+        try:
+            sync_telegram(seen)  # apply any ❌ taps first so crossed-out lots get no reminders
+        except Exception as e:
+            print(f"[warn] telegram sync: {e}", file=sys.stderr)
 
     # 1) New listings: look up land use once, alert if they pass the filter
     new = [i for i in items if i["id"] not in seen]
@@ -520,7 +787,7 @@ def main() -> None:
     reminders: dict[int, list[dict]] = {r: [] for r in REMIND_DAYS}
     for i in items:
         st = seen.get(i["id"])
-        if not st or not st.get("ok") or i["id"] in {n["id"] for n in new}:
+        if not st or not st.get("ok") or st.get("dismissed") or i["id"] in {n["id"] for n in new}:
             continue
         st["sale_date"] = i["sale_date"]  # the sale may have been rescheduled
         i["land_use"] = st.get("land_use")
@@ -537,11 +804,11 @@ def main() -> None:
           + ", ".join(f"{len(v)} reminders at {k}d" for k, v in reminders.items()))
 
     if new_alerts:
-        notify(new_alerts, f"🆕 {len(new_alerts)} new auction listing(s)", args.dry_run)
+        notify(new_alerts, f"🆕 {len(new_alerts)} new auction listing(s)", args.dry_run, seen)
     for r, group in sorted(reminders.items(), reverse=True):
         if group:
             when = "tomorrow" if r == 1 else f"in {r} days"
-            notify(group, f"⏰ {len(group)} auction(s) {when}", args.dry_run)
+            notify(group, f"⏰ {len(group)} auction(s) {when}", args.dry_run, seen)
 
     if not args.dry_run:
         save_seen(seen)
