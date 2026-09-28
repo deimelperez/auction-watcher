@@ -34,7 +34,8 @@ import requests
 # ----------------------------------------------------------------------------
 # One or more RealAuction sites, comma-separated. Tax deeds by default; add
 # https://www.miamidade.realforeclose.com to also watch foreclosure sales.
-BASE_URLS = [u.strip().rstrip("/") for u in os.getenv("BASE_URL", "https://miamidade.realtaxdeed.com").split(",") if u.strip()]
+BASE_URLS = [u.strip().rstrip("/") for u in os.getenv(
+    "BASE_URL", "https://miamidade.realtaxdeed.com,https://broward.realtaxdeed.com").split(",") if u.strip()]
 # How the site works: opening a sale date's PREVIEW page stores that date in the
 # session, then the LOAD call returns that date's items (the date is not in the LOAD URL).
 PREVIEW_PATH = os.getenv("PREVIEW_PATH", "/index.cfm?zaction=AUCTION&Zmethod=PREVIEW&AUCTIONDATE={date}")
@@ -67,7 +68,29 @@ PA_LAYER_URL = os.getenv(
 )
 # Alert only if the land-use description contains one of these words.
 # Empty = no land-use filter. Parcels whose land use can't be found are still alerted.
-LAND_USE_KEYWORDS = [k.strip().upper() for k in os.getenv("LAND_USE_KEYWORDS", "VACANT").split(",") if k.strip()]
+# Broward (and any non-Miami-Dade county): Florida DOR statewide parcel layer.
+STATEWIDE_LAYER_URL = os.getenv(
+    "STATEWIDE_LAYER_URL",
+    "https://services9.arcgis.com/Gh9awoU677aKree0/arcgis/rest/services/Florida_Statewide_Cadastral/FeatureServer/0",
+)
+# FDOR county numbers used by the statewide layer.
+FDOR_COUNTY_NO = {"miamidade": 23, "broward": 16}
+# Standard Florida DOR land-use codes (the statewide layer gives codes, not descriptions).
+DOR_CODES = {
+    0: "VACANT RESIDENTIAL", 1: "SINGLE FAMILY", 2: "MOBILE HOMES", 3: "MULTI-FAMILY 10+ UNITS",
+    4: "CONDOMINIUM", 5: "COOPERATIVES", 8: "MULTI-FAMILY <10 UNITS", 9: "RESIDENTIAL COMMON AREAS",
+    10: "VACANT COMMERCIAL", 40: "VACANT INDUSTRIAL", 70: "VACANT INSTITUTIONAL", 80: "VACANT GOVERNMENTAL",
+}
+
+# Comma = OR, plus = AND. Default: vacant land zoned/used residential (i.e. land to build a house on).
+LAND_USE_KEYWORDS = [
+    [w.strip().upper() for w in k.split("+") if w.strip()]
+    for k in os.getenv("LAND_USE_KEYWORDS", "VACANT+RESIDENTIAL").split(",") if k.strip()
+]
+# Minimum lot size in square feet (0 = no minimum). Screens out slivers and too-small lots.
+MIN_LOT_SQFT = float(os.getenv("MIN_LOT_SQFT", "5000") or 0)
+# Florida East State Plane (US survey feet), so geometry areas come back in sq ft.
+AREA_SR = os.getenv("AREA_SR", "2236")
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (personal auction watcher; 1 run/day)"}
 
@@ -162,6 +185,12 @@ def sale_dates(days: int):
             yield d
 
 
+def county_of(base: str) -> str:
+    """'https://broward.realtaxdeed.com' -> 'broward'"""
+    host = re.sub(r"^https?://(www\.)?", "", base)
+    return host.split(".")[0].lower()
+
+
 def load_date(s: requests.Session, base: str, ds: str) -> list[dict]:
     """Open the preview page for one sale date, then pull its items page by page."""
     s.get(base + PREVIEW_PATH.format(date=ds), timeout=30).raise_for_status()
@@ -174,6 +203,9 @@ def load_date(s: requests.Session, base: str, ds: str) -> list[dict]:
         if '"retHTML"' not in r.text:
             break
         batch = [i for i in parse_response(r.text, ds) if i["id"] not in seen_ids]
+        for i in batch:
+            i["county"] = county_of(base)
+            i["link"] = base + PREVIEW_PATH.format(date=ds)
         if not batch:  # empty day, or the "next page" returned what we already have
             break
         seen_ids.update(i["id"] for i in batch)
@@ -211,10 +243,11 @@ def folio_of(item: dict) -> str:
 
 
 def lookup_land_use(session: requests.Session, folio: str) -> dict | None:
-    """Return the parcel's attributes from the county layer, or None if not found."""
+    """Return the parcel's attributes (plus _geom_sqft) from the county layer, or None."""
     r = session.get(
         f"{PA_LAYER_URL}/query",
-        params={"where": f"FOLIO='{folio}'", "outFields": "*", "returnGeometry": "false", "f": "json"},
+        params={"where": f"FOLIO='{folio}'", "outFields": "*", "returnGeometry": "true",
+                "outSR": AREA_SR, "f": "json"},
         timeout=30,
     )
     r.raise_for_status()
@@ -222,16 +255,79 @@ def lookup_land_use(session: requests.Session, folio: str) -> dict | None:
     if "error" in data:
         raise RuntimeError(data["error"])
     feats = data.get("features") or []
-    return feats[0]["attributes"] if feats else None
+    if not feats:
+        return None
+    attrs = dict(feats[0].get("attributes") or {})
+    attrs["_geom_sqft"] = polygon_area(feats[0].get("geometry") or {})
+    return attrs
 
 
-def lot_size(attrs: dict) -> str:
-    """Field names for lot size aren't documented, so look for likely ones."""
+def lookup_statewide(session: requests.Session, county: str, parcel: str) -> dict | None:
+    """Look up a parcel in the Florida DOR statewide layer and map it to the same keys
+    the Miami-Dade layer uses, so the rest of the script doesn't care which county it is."""
+    co = FDOR_COUNTY_NO.get(county)
+    pid = re.sub(r"[^0-9A-Za-z]", "", parcel).upper()
+    if co is None or not pid:
+        return None
+    feats, last_err = [], None
+    for co_expr in (f"CO_NO={co}", f"CO_NO='{co}'"):  # field may be numeric or text
+        r = session.get(
+            f"{STATEWIDE_LAYER_URL}/query",
+            params={"where": f"{co_expr} AND PARCEL_ID='{pid}'", "outFields": "*",
+                    "returnGeometry": "true", "outSR": AREA_SR, "f": "json"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if "error" in data:
+            last_err = data["error"]
+            continue
+        feats = data.get("features") or []
+        break
+    else:
+        raise RuntimeError(last_err)
+    if not feats:
+        return None
+    a = dict(feats[0].get("attributes") or {})
+    try:
+        code = int(str(a.get("DOR_UC")).strip())
+    except (TypeError, ValueError):
+        code = None
+    return {
+        "DOR_CODE_CUR": a.get("DOR_UC"),
+        "DOR_DESC": DOR_CODES.get(code, f"DOR USE CODE {a.get('DOR_UC')}") if code is not None else "",
+        "LAND_VAL_CUR": a.get("LND_VAL"),
+        "TOTAL_VAL_CUR": a.get("JV"),
+        "LND_SQFOOT": a.get("LND_SQFOOT"),  # land sq ft, if the layer carries it
+        "_geom_sqft": polygon_area(feats[0].get("geometry") or {}),
+    }
+
+
+def polygon_area(geom: dict) -> float | None:
+    """Area of an ArcGIS polygon in the units of its spatial reference (sq ft here).
+    Outer rings and holes have opposite winding, so signed areas net out correctly."""
+    rings = geom.get("rings") or []
+    total = 0.0
+    for ring in rings:
+        a = 0.0
+        for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+            a += x1 * y2 - x2 * y1
+        total += a / 2
+    return abs(total) or None
+
+
+def lot_sqft(attrs: dict) -> tuple[float | None, str]:
+    """Lot size in sq ft: a lot-size field if the layer has one, else the parcel polygon's area."""
     for k, v in attrs.items():
         ku = k.upper()
-        if v not in (None, "", 0) and ("LOT" in ku and ("SIZE" in ku or "SQ" in ku) or "ACRE" in ku):
-            return f"{v} ({k})"
-    return ""
+        if not isinstance(v, (int, float)) or v <= 0:
+            continue
+        if "ACRE" in ku:
+            return float(v) * 43560, k
+        if ("LOT" in ku and ("SIZE" in ku or "SQ" in ku or "AREA" in ku)) or ku in ("LND_SQFOOT", "LAND_SQFT"):
+            return float(v), k
+    g = attrs.get("_geom_sqft")
+    return (g, "parcel shape") if g else (None, "")
 
 
 def enrich(items: list[dict]) -> None:
@@ -239,30 +335,53 @@ def enrich(items: list[dict]) -> None:
     s.headers.update(HEADERS)
     for item in items:
         item["land_use"] = None
-        folio = folio_of(item)
-        if not folio:
-            continue
+        county = item.get("county", "miamidade")
+        if county == "miamidade":
+            folio = folio_of(item)
+            if not folio:
+                continue
+        else:
+            folio = re.sub(r"[^0-9A-Za-z]", "", item["parcel"]).upper()
+            if not folio or item["parcel"].upper().startswith("MULTIPLE"):
+                continue
         try:
-            a = lookup_land_use(s, folio)
+            if county == "miamidade":
+                a = lookup_land_use(s, folio)
+            else:
+                a = lookup_statewide(s, county, item["parcel"])
         except Exception as e:
-            print(f"[warn] land use {folio}: {e}", file=sys.stderr)
+            print(f"[warn] land use {county} {folio}: {e}", file=sys.stderr)
             continue
+        if not a:
+            print(f"[land use] {county} {folio}: not found")
         if a:
+            sqft, src = lot_sqft(a)
             item["land_use"] = {
                 "code": a.get("DOR_CODE_CUR"),
                 "desc": (a.get("DOR_DESC") or "").strip(),
                 "land_val": a.get("LAND_VAL_CUR"),
                 "total_val": a.get("TOTAL_VAL_CUR"),
-                "lot": lot_size(a),
+                "lot_sqft": round(sqft) if sqft else None,
+                "lot_src": src,
             }
+            # shows in the Actions log so you can see the county's real descriptions
+            print(f"[land use] {county} {folio}: {item['land_use']['code']} {item['land_use']['desc']!r}, "
+                  f"lot {item['land_use']['lot_sqft']} sq ft ({src or 'unknown'})")
         time.sleep(1)
 
 
 def land_use_ok(item: dict) -> bool:
+    """Buildable-residential screen. Unknown values pass, so a human can take a look."""
     lu = item.get("land_use")
-    if not LAND_USE_KEYWORDS or not lu or not lu["desc"]:
-        return True  # no filter, or unknown land use -> let a human look
-    return any(k in lu["desc"].upper() for k in LAND_USE_KEYWORDS)
+    if not lu:
+        return True
+    desc = (lu.get("desc") or "").upper()
+    if LAND_USE_KEYWORDS and desc and not any(all(w in desc for w in group) for group in LAND_USE_KEYWORDS):
+        return False
+    sqft = lu.get("lot_sqft")
+    if MIN_LOT_SQFT and sqft and sqft < MIN_LOT_SQFT:
+        return False
+    return True
 
 
 # ----------------------------------------------------------------------------
@@ -297,7 +416,7 @@ def fmt(item: dict) -> str:
     bid = f"${item['bid']:,.2f}" if item["bid"] is not None else "n/a"
     assessed = f"${item['assessed']:,.0f}" if item["assessed"] is not None else "n/a"
     lines = [
-        f"{item['sale_date']}  {item['type']}  #{item['case']}",
+        f"{item['sale_date']}  {item.get('county', '').upper()}  {item['type']}  #{item['case']}",
         f"Parcel: {item['parcel']}",
         f"Address: {item['address'] or '(none)'} {item['city']}".rstrip(),
         f"Bid: {bid}   Assessed: {assessed}",
@@ -310,16 +429,22 @@ def fmt(item: dict) -> str:
             vals.append(f"land ${lu['land_val']:,.0f}")
         if lu["total_val"] is not None:
             vals.append(f"total ${lu['total_val']:,.0f}")
-        if lu["lot"]:
-            vals.append(f"lot {lu['lot']}")
+        if lu.get("lot_sqft"):
+            acres = lu["lot_sqft"] / 43560
+            vals.append(f"lot {lu['lot_sqft']:,} sq ft ({acres:.2f} ac)")
         if vals:
             lines.append("PA values: " + ", ".join(vals))
     elif folio_of(item):
         lines.append("Land use: not found, check manually")
     if t := tags(item):
         lines.append("Note: " + "; ".join(t))
-    if folio := folio_of(item):
-        lines.append(f"Property Search (folio {folio}): https://apps.miamidadepa.gov/PropertySearch/")
+    if item.get("link"):
+        lines.append(f"Auction: {item['link']}")
+    if item.get("county", "miamidade") == "miamidade":
+        if folio := folio_of(item):
+            lines.append(f"Property Search (folio {folio}): https://apps.miamidadepa.gov/PropertySearch/")
+    elif item.get("county") == "broward" and item["parcel"] and not item["parcel"].upper().startswith("MULTIPLE"):
+        lines.append(f"Property Search (parcel {item['parcel']}): https://web.bcpa.net/BcpaClient/")
     return "\n".join(lines)
 
 
