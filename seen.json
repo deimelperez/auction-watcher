@@ -1,16 +1,1 @@
-{
- "broward:1": {
-  "dismissed": true,
-  "land_use": null,
-  "ok": true,
-  "reminded": [],
-  "sale_date": "Error"
- },
- "miamidade:1": {
-  "dismissed": true,
-  "land_use": null,
-  "ok": true,
-  "reminded": [],
-  "sale_date": "Error"
- }
-}
+[]
