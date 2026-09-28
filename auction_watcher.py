@@ -268,8 +268,11 @@ def fetch_site(site: str) -> list[dict]:
         if m:
             repid = m.group(1)
         else:
-            print(f"[warn] {county_of(base)}: no REPID found on the search page "
-                  f"(page starts: {re.sub(r'\s+', ' ', page.text[:200])!r})", file=sys.stderr)
+            title = re.search(r"<title>(.*?)</title>", page.text, re.I | re.S)
+            print(f"[warn] {county_of(base)}: no REPID on the search page. landed on {page.url} "
+                  f"(status {page.status_code}), title: {title.group(1).strip() if title else '?'!r}, "
+                  f"login form: {bool(re.search(r'type=.?password', page.text, re.I))}, "
+                  f"mentions REPORT: {bool(re.search(r'REPVIEW|Report_id', page.text, re.I))}", file=sys.stderr)
     repid = repid or ms
     print(f"[fetch] {county_of(base)}: report id {repid}")
     time.sleep(2)
