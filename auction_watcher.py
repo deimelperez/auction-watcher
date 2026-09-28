@@ -30,9 +30,17 @@ import requests
 # ----------------------------------------------------------------------------
 # CONFIG (environment variables)
 # ----------------------------------------------------------------------------
-BASE_URL = os.getenv("BASE_URL", "https://miamidade.realtaxdeed.com")
-# Copy the list request from DevTools > Network and replace the date with {date}.
-AJAX_URL_TEMPLATE = os.getenv("AJAX_URL_TEMPLATE", "")
+# One or more RealAuction sites, comma-separated. Tax deeds by default; add
+# https://www.miamidade.realforeclose.com to also watch foreclosure sales.
+BASE_URLS = [u.strip().rstrip("/") for u in os.getenv("BASE_URL", "https://www.miamidade.realtaxdeed.com").split(",") if u.strip()]
+# How the site works: opening a sale date's PREVIEW page stores that date in the
+# session, then the LOAD call returns that date's items (the date is not in the LOAD URL).
+PREVIEW_PATH = os.getenv("PREVIEW_PATH", "/index.cfm?zaction=AUCTION&Zmethod=PREVIEW&AUCTIONDATE={date}")
+LOAD_PATH = os.getenv(
+    "LOAD_PATH",
+    "/index.cfm?zaction=AUCTION&Zmethod=UPDATE&FNC=LOAD&AREA=W&PageDir={page_dir}&doR=1&bypassPage=1&test=1",
+)
+MAX_PAGES = int(os.getenv("MAX_PAGES", "10"))
 DATE_FORMAT = os.getenv("DATE_FORMAT", "%m/%d/%Y")
 DAYS_AHEAD = int(os.getenv("DAYS_AHEAD", "45"))
 
@@ -150,24 +158,39 @@ def sale_dates(days: int):
             yield d
 
 
+def load_date(s: requests.Session, base: str, ds: str) -> list[dict]:
+    """Open the preview page for one sale date, then pull its items page by page."""
+    s.get(base + PREVIEW_PATH.format(date=ds), timeout=30).raise_for_status()
+    items, seen_ids = [], set()
+    for page in range(MAX_PAGES):
+        ms = int(time.time() * 1000)
+        url = base + LOAD_PATH.format(page_dir=0 if page == 0 else 1) + f"&tx={ms}&_={ms}"
+        r = s.get(url, timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
+        r.raise_for_status()
+        if '"retHTML"' not in r.text:
+            break
+        batch = [i for i in parse_response(r.text, ds) if i["id"] not in seen_ids]
+        if not batch:  # empty day, or the "next page" returned what we already have
+            break
+        seen_ids.update(i["id"] for i in batch)
+        items.extend(batch)
+        time.sleep(2)
+    return items
+
+
 def fetch_all() -> list[dict]:
-    if not AJAX_URL_TEMPLATE:
-        sys.exit("Set AJAX_URL_TEMPLATE (the list request from DevTools, with {date} in place of the date).")
-    s = requests.Session()
-    s.headers.update(HEADERS)
-    s.get(BASE_URL, timeout=30)  # establishes the session cookies the AJAX call expects
     items = []
-    for d in sale_dates(DAYS_AHEAD):
-        ds = d.strftime(DATE_FORMAT)
-        url = AJAX_URL_TEMPLATE.format(date=requests.utils.quote(ds, safe=""))
-        try:
-            r = s.get(url, timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
-            r.raise_for_status()
-            if '"retHTML"' in r.text:
-                items.extend(parse_response(r.text, ds))
-        except Exception as e:  # one bad date shouldn't kill the run
-            print(f"[warn] {ds}: {e}", file=sys.stderr)
-        time.sleep(2)  # be polite
+    for base in BASE_URLS:
+        s = requests.Session()
+        s.headers.update(HEADERS)
+        s.get(base, timeout=30)  # session cookies
+        for d in sale_dates(DAYS_AHEAD):
+            ds = d.strftime(DATE_FORMAT)
+            try:
+                items.extend(load_date(s, base, ds))
+            except Exception as e:  # one bad date shouldn't kill the run
+                print(f"[warn] {base} {ds}: {e}", file=sys.stderr)
+            time.sleep(2)  # be polite
     return items
 
 
