@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write           # lets the job commit seen.json back
 
+concurrency:
+  group: auction-watcher    # never run at the same time as the sync job (both edit seen.json)
+  cancel-in-progress: false
+
 jobs:
   watch:
     runs-on: ubuntu-latest
@@ -19,8 +23,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Run watcher
         env:
-          # comma-separated; add https://www.miamidade.realforeclose.com to also watch foreclosures
-          BASE_URL: "https://miamidade.realtaxdeed.com,https://broward.realtaxdeed.com"
+          # comma-separated sites as URL|AUCT_TYPE (2 = tax deed)
+          BASE_URL: "https://www.miamidade.realforeclose.com|2,https://broward.realtaxdeed.com|2"
           AUCTION_TYPES: TAXDEED
           MAX_BID: "25000"
           ZIPS: ""
@@ -28,6 +32,8 @@ jobs:
           REMIND_DAYS: "7,1"            # reminders this many days before each sale
           LAND_USE_KEYWORDS: "VACANT+RESIDENTIAL"   # + means AND, comma means OR; empty = any
           MIN_LOT_SQFT: "5000"          # smallest lot to alert on; 0 = no minimum
+          COMP_RADIUS_FT: "2640"        # comparable sales within half a mile (doubles if too few)
+          COMP_YEARS: "3"               # sales from the last 3 years
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
@@ -38,4 +44,4 @@ jobs:
           git config user.name "auction-watcher"
           git config user.email "actions@users.noreply.github.com"
           git add seen.json
-          git diff --cached --quiet || (git commit -m "update seen listings" && git push)
+          git diff --cached --quiet || (git commit -m "update seen listings" && git pull --rebase && git push)
