@@ -49,6 +49,11 @@ LOAD_PATH = ("/index.cfm?zaction=AJAX&zmethod=COM&Process=REPVIEW&SHOWJSON=FALSE
 # Links to open in your browser: the listing itself ({aid} = auction item id), and its sale-date page.
 DETAIL_PATH = os.getenv("DETAIL_PATH", "/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID={aid}&bypassPage=1")
 PREVIEW_PATH = "/index.cfm?zaction=AUCTION&Zmethod=PREVIEW&AUCTIONDATE={date}"
+# Public calendar + per-day listing (no login needed)
+CALENDAR_PATH = os.getenv("CALENDAR_PATH", "/index.cfm?zaction=USER&zmethod=CALENDAR")
+DAY_LOAD_PATH = ("/index.cfm?zaction=AUCTION&Zmethod=UPDATE&FNC=LOAD&AREA=W&PageDir={page_dir}"
+                 "&doR=1&bypassPage=1&test=1&tx={ms}&_={ms}")
+
 # Report column positions (from the site's quick-search results)
 COL = {"sale_date": 0, "case": 2, "status": 3, "bid": 5, "assessed": 6,
        "address": 9, "city": 10, "zip": 11, "parcel": 12}
@@ -247,53 +252,72 @@ def parse_report(text: str, base: str) -> tuple[list[dict], int]:
     return items, total
 
 
+def auction_days(s: requests.Session, base: str) -> list[str]:
+    """Days with auctions, from the public calendar. Falls back to every weekday if it can't be read."""
+    start, end = date.today(), date.today() + timedelta(days=DAYS_AHEAD)
+    found = set()
+    try:
+        # the calendar shows a month at a time; look at this month and the next ones in range
+        months = {(start.year, start.month)}
+        d = start
+        while d <= end:
+            months.add((d.year, d.month)); d += timedelta(days=28)
+        for y, m in sorted(months):
+            r = s.get(base + CALENDAR_PATH + f"&selCalDate={m}/1/{y}", timeout=30)
+            r.raise_for_status()
+            for ds in re.findall(r'dayid="(\d{2}/\d{2}/\d{4})"', r.text, re.I):
+                try:
+                    dd = datetime.strptime(ds, "%m/%d/%Y").date()
+                except ValueError:
+                    continue
+                if start <= dd <= end:
+                    found.add(dd)
+            time.sleep(2)
+    except Exception as e:
+        print(f"[warn] {county_of(base)}: calendar: {e}", file=sys.stderr)
+    if found:
+        print(f"[fetch] {county_of(base)}: calendar has {len(found)} auction day(s) in range")
+        return [d.strftime(DATE_FORMAT) for d in sorted(found)]
+    print(f"[warn] {county_of(base)}: couldn't read auction days from the calendar; checking every weekday",
+          file=sys.stderr)
+    return [d.strftime(DATE_FORMAT) for d in sale_dates(DAYS_AHEAD)]
+
+
 def fetch_site(site: str) -> list[dict]:
-    base, auct_type, report_id = (site.split("|") + ["", ""])[:3]
-    base, auct_type, report_id = base.rstrip("/"), (auct_type or "2"), (report_id or "33")
+    base = site.split("|")[0].rstrip("/")
+    county = county_of(base)
     s = requests.Session()
     s.headers.update(HEADERS)
     s.get(base, timeout=30).raise_for_status()  # session cookies
-    start, end = date.today(), date.today() + timedelta(days=DAYS_AHEAD)
-    fmt_d = lambda d: f"{d.month}/{d.day}/{d.year}"
-    ms = int(time.time() * 1000)
-    repid = None
-    if SEARCH_PAGE_PATH:
-        time.sleep(2)
-        page = s.get(base + SEARCH_PAGE_PATH.format(report_id=report_id), timeout=30)
-        if re.search(r"log ?in|password", page.text[:5000], re.I) and not re.search(r"REPID", page.text, re.I):
-            print(f"[warn] {county_of(base)}: the search page seems to require logging in; "
-                  "this script does not log in", file=sys.stderr)
-        page.raise_for_status()
-        m = re.search(r"REPID\W{0,5}(\d{6,})", page.text, re.I)
-        if m:
-            repid = m.group(1)
-        else:
-            title = re.search(r"<title>(.*?)</title>", page.text, re.I | re.S)
-            print(f"[warn] {county_of(base)}: no REPID on the search page. landed on {page.url} "
-                  f"(status {page.status_code}), title: {title.group(1).strip() if title else '?'!r}, "
-                  f"login form: {bool(re.search(r'type=.?password', page.text, re.I))}, "
-                  f"mentions REPORT: {bool(re.search(r'REPVIEW|Report_id', page.text, re.I))}", file=sys.stderr)
-    repid = repid or ms
-    print(f"[fetch] {county_of(base)}: report id {repid}")
-    time.sleep(2)
-    f = s.get(base + FILTER_PATH.format(auct_type=auct_type, start=fmt_d(start), end=fmt_d(end), repid=repid, ms=ms),
-              timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
-    f.raise_for_status()
-    if "expired" in f.text.lower() or "error" in f.text.lower()[:300]:
-        print(f"[warn] {county_of(base)}: filter step said: {re.sub(r'<[^>]+>', ' ', f.text)[:200]!r}", file=sys.stderr)
     items, ids = [], set()
-    for page in range(1, MAX_PAGES + 1):
-        time.sleep(2)
-        r = s.get(base + LOAD_PATH.format(repid=repid, page=page, ms=int(time.time() * 1000)),
-                  timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
-        r.raise_for_status()
-        batch, total = parse_report(r.text, base)
-        new = [i for i in batch if i["id"] not in ids]
-        ids.update(i["id"] for i in new)
-        items.extend(new)
-        if not new or page >= total:
-            break
-    print(f"[fetch] {county_of(base)}: {len(items)} listings {fmt_d(start)}-{fmt_d(end)}")
+    for ds in auction_days(s, base):
+        try:
+            time.sleep(2)
+            s.get(base + PREVIEW_PATH.format(date=ds), timeout=30).raise_for_status()  # select the day
+            day_new = 0
+            for page in range(MAX_PAGES):
+                time.sleep(2)
+                ms = int(time.time() * 1000)
+                r = s.get(base + DAY_LOAD_PATH.format(page_dir=0 if page == 0 else 1, ms=ms),
+                          timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
+                r.raise_for_status()
+                if '"retHTML"' not in r.text:
+                    break
+                batch = parse_response(r.text, ds)
+                fresh = [i for i in batch if f"{county}:{i['id']}" not in ids]
+                if not fresh:  # nothing new: empty day, last page, or a repeat of an earlier day
+                    break
+                for i in fresh:
+                    aid = i["id"]
+                    i.update({"id": f"{county}:{aid}", "aid": aid, "county": county,
+                              "link": base + DETAIL_PATH.format(aid=aid),
+                              "day_link": base + PREVIEW_PATH.format(date=ds)})
+                    ids.add(i["id"])
+                items.extend(fresh)
+                day_new += len(fresh)
+            print(f"[fetch] {county} {ds}: {day_new} listing(s)")
+        except Exception as e:  # one bad day shouldn't kill the run
+            print(f"[warn] {county} {ds}: {e}", file=sys.stderr)
     return items
 
 
