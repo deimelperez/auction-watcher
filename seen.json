@@ -14,15 +14,17 @@
     "subject": "\ud83c\udd95 2 new auction listing(s)"
    }
   },
-  "offset": 413595579
+  "offset": 413595581
  },
  "broward:1": {
+  "dismissed": true,
   "land_use": null,
   "ok": true,
   "reminded": [],
   "sale_date": "Error"
  },
  "miamidade:1": {
+  "dismissed": true,
   "land_use": null,
   "ok": true,
   "reminded": [],
