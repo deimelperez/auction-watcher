@@ -206,10 +206,17 @@ def county_of(base: str) -> str:
 def parse_report(text: str, base: str) -> tuple[list[dict], int]:
     """Parse one page of the quick-search report. Returns (items, total_pages)."""
     data = json.loads(text, strict=False)
+    err = ((data.get("userdata") or {}).get("errorMSG") or "").strip()
+    if err:
+        print(f"[warn] {county_of(base)}: site says: {err}", file=sys.stderr)
     items = []
     for row in data.get("rows") or []:
         c = row.get("cell") or []
         get = lambda k: (c[COL[k]] if COL[k] < len(c) else "") or ""
+        # skip anything that isn't a real listing (error rows, headers, blank rows)
+        if not re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", get("sale_date").strip()) or not get("case").strip():
+            print(f"[warn] {county_of(base)}: skipped odd row id={row.get('id')}: {c[:6]}", file=sys.stderr)
+            continue
         zip5 = get("zip")[:5]
         items.append({
             "id": f"{county_of(base)}:{row.get('id')}",  # ids are per site, so prefix the county
@@ -507,6 +514,8 @@ def load_seen() -> dict:
         data = json.loads(SEEN_FILE.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+    if isinstance(data, dict):
+        data.pop("_tg", None)  # leftover from the checklist version
     if isinstance(data, list):  # old format: plain list of ids -> treat as seen, no reminders sent yet
         return {i: {"sale_date": "", "ok": True, "land_use": None, "reminded": []} for i in data}
     return data
@@ -625,76 +634,20 @@ def tg(method: str, **payload) -> dict:
     return data.get("result")
 
 
-def render_list(msg: dict, seen: dict) -> tuple[str, dict]:
-    """Text + buttons for one checklist message; crossed-out items are struck through."""
-    parts, buttons = [f"<b>{html.escape(msg['subject'])}</b>"], []
-    for n, iid in enumerate(msg["items"], 1):
-        crossed = seen.get(iid, {}).get("dismissed")
-        block = msg["blocks"][iid]
-        parts.append(f"❌ <s>{n}. {block}</s>" if crossed else f"☐ {n}. {block}")
-        buttons.append({"text": f"↩️ {n}" if crossed else f"❌ {n}", "callback_data": f"x:{iid}"})
-    rows = [buttons[i:i + 5] for i in range(0, len(buttons), 5)]
-    return "\n\n".join(parts), {"inline_keyboard": rows}
-
-
-def send_telegram_list(items: list[dict], subject: str, seen: dict) -> None:
-    """Send listings as a numbered checklist; tap ❌ n to cross one out (no more reminders for it)."""
-    meta = seen.setdefault("_tg", {"offset": 0, "messages": {}})
-    blocks = {i["id"]: fmt_html(i) for i in items}
-    chunk, size, chunks = [], 0, []
-    for i in items:  # keep each message under Telegram's 4096-char limit
-        n = len(blocks[i["id"]]) + 20
-        if chunk and (size + n > 3500 or len(chunk) >= 10):
-            chunks.append(chunk); chunk, size = [], 0
-        chunk.append(i["id"]); size += n
-    if chunk:
-        chunks.append(chunk)
-    for k, ids in enumerate(chunks, 1):
+def send_telegram_html(items: list[dict], subject: str) -> None:
+    """Send listings as compact HTML messages (split to stay under Telegram's 4096-char limit)."""
+    blocks = [fmt_html(i) for i in items]
+    chunks, cur = [], []
+    for b in blocks:
+        if cur and (sum(len(x) for x in cur) + len(b) > 3500 or len(cur) >= 10):
+            chunks.append(cur); cur = []
+        cur.append(b)
+    if cur:
+        chunks.append(cur)
+    for k, ch in enumerate(chunks, 1):
         subj = subject + (f" ({k}/{len(chunks)})" if len(chunks) > 1 else "")
-        msg = {"subject": subj, "items": ids, "blocks": {i: blocks[i] for i in ids}, "date": date.today().isoformat()}
-        text, kb = render_list(msg, seen)
-        res = tg("sendMessage", chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="HTML",
-                 disable_web_page_preview=True, reply_markup=kb)
-        meta["messages"][str(res["message_id"])] = msg
-
-
-def sync_telegram(seen: dict) -> int:
-    """Apply ❌ taps: mark items dismissed/undismissed and strike them through. Returns taps handled."""
-    if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
-        return 0
-    meta = seen.setdefault("_tg", {"offset": 0, "messages": {}})
-    updates = tg("getUpdates", offset=meta.get("offset", 0), timeout=0, allowed_updates=["callback_query"])
-    touched, handled = set(), 0
-    for u in updates:
-        meta["offset"] = u["update_id"] + 1
-        cq = u.get("callback_query") or {}
-        data, m = cq.get("data") or "", cq.get("message") or {}
-        if str((m.get("chat") or {}).get("id")) != str(TELEGRAM_CHAT_ID) or not data.startswith("x:"):
-            continue
-        iid = data[2:]
-        if iid in seen:
-            seen[iid]["dismissed"] = not seen[iid].get("dismissed")
-            touched.add(str(m.get("message_id")))
-            handled += 1
-        try:
-            tg("answerCallbackQuery", callback_query_id=cq["id"], text="Updated")
-        except Exception:
-            pass  # taps older than a few minutes can't be answered; the edit below still works
-    # re-render every message that shows a tapped item (it may appear in several messages)
-    changed = {iid for mid in touched for iid in meta["messages"].get(mid, {}).get("items", [])}
-    for mid, msg in meta["messages"].items():
-        if mid in touched or changed & set(msg["items"]):
-            text, kb = render_list(msg, seen)
-            try:
-                tg("editMessageText", chat_id=TELEGRAM_CHAT_ID, message_id=int(mid), text=text,
-                   parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb)
-            except Exception as e:
-                if "not modified" not in str(e):
-                    print(f"[warn] edit {mid}: {e}", file=sys.stderr)
-    # forget messages older than 90 days
-    cutoff = (date.today() - timedelta(days=90)).isoformat()
-    meta["messages"] = {k: v for k, v in meta["messages"].items() if v.get("date", "") >= cutoff}
-    return handled
+        text = f"<b>{html.escape(subj)}</b>\n\n" + "\n\n".join(ch)
+        tg("sendMessage", chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="HTML", disable_web_page_preview=True)
 
 
 def send_telegram(text: str) -> None:
@@ -721,7 +674,7 @@ def notify(items: list[dict], subject: str, dry_run: bool, seen: dict | None = N
         print(f"--- {subject} ---\n{body}")
         return
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        send_telegram_list(items, subject, seen if seen is not None else {})
+        send_telegram_html(items, subject)
     if SMTP_USER and SMTP_PASS:
         send_email(subject, body)
 
@@ -732,16 +685,7 @@ def main() -> None:
     ap.add_argument("--sample", help="parse a saved JSON response instead of fetching")
     ap.add_argument("--dry-run", action="store_true", help="print alerts instead of sending")
     ap.add_argument("--folio", help="test the land-use lookup for one folio and exit")
-    ap.add_argument("--sync", action="store_true", help="only apply Telegram ❌ taps (runs hourly)")
     args = ap.parse_args()
-
-    if args.sync:
-        seen = load_seen()
-        n = sync_telegram(seen)
-        print(f"[sync] {n} tap(s) applied")
-        if n:
-            save_seen(seen)
-        return
 
     if args.folio:
         s = requests.Session()
@@ -763,11 +707,6 @@ def main() -> None:
     items = [i for i in fetch_all() if keep(i)]
     seen = load_seen()
     today = date.today()
-    if not args.dry_run:
-        try:
-            sync_telegram(seen)  # apply any ❌ taps first so crossed-out lots get no reminders
-        except Exception as e:
-            print(f"[warn] telegram sync: {e}", file=sys.stderr)
 
     # 1) New listings: look up land use once, alert if they pass the filter
     new = [i for i in items if i["id"] not in seen]
@@ -787,7 +726,7 @@ def main() -> None:
     reminders: dict[int, list[dict]] = {r: [] for r in REMIND_DAYS}
     for i in items:
         st = seen.get(i["id"])
-        if not st or not st.get("ok") or st.get("dismissed") or i["id"] in {n["id"] for n in new}:
+        if not st or not st.get("ok") or i["id"] in {n["id"] for n in new}:
             continue
         st["sale_date"] = i["sale_date"]  # the sale may have been rescheduled
         i["land_use"] = st.get("land_use")
