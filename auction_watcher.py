@@ -32,11 +32,15 @@ import requests
 # ----------------------------------------------------------------------------
 # CONFIG (environment variables)
 # ----------------------------------------------------------------------------
-# RealAuction sites, comma-separated, each as URL|AUCT_TYPE (2 = tax deed).
+# RealAuction sites, comma-separated, each as URL|AUCT_TYPE|REPORT_ID
+# (AUCT_TYPE 2 = tax deed; REPORT_ID = the quick-search page's Report_id).
 # Miami-Dade tax deeds are listed on its realforeclose site; Broward uses realtaxdeed.
 BASE_URLS = [u.strip().rstrip("/") for u in os.getenv(
-    "BASE_URL", "https://www.miamidade.realforeclose.com|2,https://broward.realtaxdeed.com|2").split(",") if u.strip()]
+    "BASE_URL", "https://www.miamidade.realforeclose.com|2|33,https://broward.realtaxdeed.com|2|33").split(",") if u.strip()]
 # The site's "quick search" report: FilterData sets the date range in the session, LoadData returns rows.
+# The quick-search page itself. Opening it registers a report id (REPID) in the session;
+# FilterData/LoadData only work with that id, otherwise the site answers "report expired".
+SEARCH_PAGE_PATH = os.getenv("SEARCH_PAGE_PATH", "/index.cfm?zaction=admin&zmethod=REPORT&Report_id={report_id}")
 FILTER_PATH = ("/index.cfm?&AUCT_TYPE={auct_type}&CaseNumber=&view_ssdate={start}&view_sedate={end}"
                "&ParcelID=&PrimaryPlaintiffTD=&Address=&City=&Zip=&My_bids=null&CaseStatus=0,1,2,3,4,5,6"
                "&zaction=AJAX&zmethod=COM&process=REPVIEW&FUNC=FilterData&SHOWJSON=false&REPID={repid}&_={ms}")
@@ -244,16 +248,36 @@ def parse_report(text: str, base: str) -> tuple[list[dict], int]:
 
 
 def fetch_site(site: str) -> list[dict]:
-    base, _, auct_type = site.partition("|")
-    base, auct_type = base.rstrip("/"), (auct_type or "2")
+    base, auct_type, report_id = (site.split("|") + ["", ""])[:3]
+    base, auct_type, report_id = base.rstrip("/"), (auct_type or "2"), (report_id or "33")
     s = requests.Session()
     s.headers.update(HEADERS)
     s.get(base, timeout=30).raise_for_status()  # session cookies
     start, end = date.today(), date.today() + timedelta(days=DAYS_AHEAD)
     fmt_d = lambda d: f"{d.month}/{d.day}/{d.year}"
-    repid = ms = int(time.time() * 1000)
-    s.get(base + FILTER_PATH.format(auct_type=auct_type, start=fmt_d(start), end=fmt_d(end), repid=repid, ms=ms),
-          timeout=30, headers={"X-Requested-With": "XMLHttpRequest"}).raise_for_status()
+    ms = int(time.time() * 1000)
+    repid = None
+    if SEARCH_PAGE_PATH:
+        time.sleep(2)
+        page = s.get(base + SEARCH_PAGE_PATH.format(report_id=report_id), timeout=30)
+        if re.search(r"log ?in|password", page.text[:5000], re.I) and not re.search(r"REPID", page.text, re.I):
+            print(f"[warn] {county_of(base)}: the search page seems to require logging in; "
+                  "this script does not log in", file=sys.stderr)
+        page.raise_for_status()
+        m = re.search(r"REPID\W{0,5}(\d{6,})", page.text, re.I)
+        if m:
+            repid = m.group(1)
+        else:
+            print(f"[warn] {county_of(base)}: no REPID found on the search page "
+                  f"(page starts: {re.sub(r'\s+', ' ', page.text[:200])!r})", file=sys.stderr)
+    repid = repid or ms
+    print(f"[fetch] {county_of(base)}: report id {repid}")
+    time.sleep(2)
+    f = s.get(base + FILTER_PATH.format(auct_type=auct_type, start=fmt_d(start), end=fmt_d(end), repid=repid, ms=ms),
+              timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
+    f.raise_for_status()
+    if "expired" in f.text.lower() or "error" in f.text.lower()[:300]:
+        print(f"[warn] {county_of(base)}: filter step said: {re.sub(r'<[^>]+>', ' ', f.text)[:200]!r}", file=sys.stderr)
     items, ids = [], set()
     for page in range(1, MAX_PAGES + 1):
         time.sleep(2)
