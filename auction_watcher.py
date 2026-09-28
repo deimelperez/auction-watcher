@@ -252,6 +252,20 @@ def parse_report(text: str, base: str) -> tuple[list[dict], int]:
     return items, total
 
 
+def calendar_day_wanted(box: str) -> bool:
+    """Keep a calendar day if it has sales scheduled of a type we watch (tax deed by default)."""
+    text = re.sub(r"<[^>]+>", " ", box).upper()
+    sch = re.search(r'CALSCH[^>]*>\s*(\d+)', box, re.I)
+    if sch and int(sch.group(1)) == 0:
+        return False
+    kinds = {"TAXDEED": ("TAX DEED", "TAXDEED", " TD"), "FORECLOSURE": ("FORECLOSURE", " FC")}
+    watched = [w for t in AUCTION_TYPES for w in kinds.get(t.replace(" ", ""), (t,))]
+    if not watched or not any(k in " " + text for k in watched):
+        # unknown label: keep the day rather than miss sales (listings are filtered by type anyway)
+        return not any(k in " " + text for ks in kinds.values() for k in ks)
+    return True
+
+
 def auction_days(s: requests.Session, base: str) -> list[str]:
     """Days with auctions, from the public calendar. Falls back to every weekday if it can't be read."""
     start, end = date.today(), date.today() + timedelta(days=DAYS_AHEAD)
@@ -265,13 +279,15 @@ def auction_days(s: requests.Session, base: str) -> list[str]:
         for y, m in sorted(months):
             r = s.get(base + CALENDAR_PATH + f"&selCalDate={m}/1/{y}", timeout=30)
             r.raise_for_status()
-            for ds in re.findall(r'dayid="(\d{2}/\d{2}/\d{4})"', r.text, re.I):
+            # each day: <div class="CALBOX ..." dayid="09/01/2026"> ... Foreclosure ... CALSCH">4</span> FC ...</div>
+            for ds, box in re.findall(r'dayid="(\d{2}/\d{2}/\d{4})"(.*?)</div>', r.text, re.I | re.S):
                 try:
                     dd = datetime.strptime(ds, "%m/%d/%Y").date()
                 except ValueError:
                     continue
-                if start <= dd <= end:
-                    found.add(dd)
+                if not (start <= dd <= end) or not calendar_day_wanted(box):
+                    continue
+                found.add(dd)
             time.sleep(2)
     except Exception as e:
         print(f"[warn] {county_of(base)}: calendar: {e}", file=sys.stderr)
