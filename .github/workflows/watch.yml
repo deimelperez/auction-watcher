@@ -20,7 +20,7 @@ jobs:
       - name: Run watcher
         env:
           # add ,https://www.miamidade.realforeclose.com to also watch foreclosures
-          BASE_URL: https://www.miamidade.realtaxdeed.com
+          BASE_URL: https://miamidade.realtaxdeed.com
           AUCTION_TYPES: TAXDEED
           MAX_BID: "25000"
           ZIPS: ""
