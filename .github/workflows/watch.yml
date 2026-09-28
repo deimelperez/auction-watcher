@@ -23,8 +23,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Run watcher
         env:
-          # comma-separated sites as URL|AUCT_TYPE (2 = tax deed)
-          BASE_URL: "https://www.miamidade.realforeclose.com|2,https://broward.realtaxdeed.com|2"
+          # comma-separated sites as URL|AUCT_TYPE|REPORT_ID (2 = tax deed; REPORT_ID from the quick-search page URL)
+          BASE_URL: "https://www.miamidade.realforeclose.com|2|33,https://broward.realtaxdeed.com|2|33"
           AUCTION_TYPES: TAXDEED
           MAX_BID: "25000"
           ZIPS: ""
