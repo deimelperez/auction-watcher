@@ -19,8 +19,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Run watcher
         env:
-          BASE_URL: https://miamidade.realtaxdeed.com
-          AJAX_URL_TEMPLATE: ${{ secrets.AJAX_URL_TEMPLATE }}
+          # add ,https://www.miamidade.realforeclose.com to also watch foreclosures
+          BASE_URL: https://www.miamidade.realtaxdeed.com
           AUCTION_TYPES: TAXDEED
           MAX_BID: "25000"
           ZIPS: ""
