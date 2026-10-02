@@ -119,20 +119,5 @@
   "ok": true,
   "reminded": [],
   "sale_date": "11/12/2026"
- },
- "miamidade:1519940": {
-  "land_use": {
-   "code": "9981",
-   "desc": "ACREAGE NOT CLASSIFIED AG : VACANT LAND",
-   "land_val": 938,
-   "lot_sqft": 54450,
-   "lot_src": "LOT_SIZE",
-   "total_val": 938
-  },
-  "ok": false,
-  "reminded": [
-   7
-  ],
-  "sale_date": "10/01/2026"
  }
 }
