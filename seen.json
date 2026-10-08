@@ -74,13 +74,17 @@
  "miamidade:1516322": {
   "land_use": null,
   "ok": true,
-  "reminded": [],
+  "reminded": [
+   7
+  ],
   "sale_date": "10/15/2026"
  },
  "miamidade:1516458": {
   "land_use": null,
   "ok": true,
-  "reminded": [],
+  "reminded": [
+   7
+  ],
   "sale_date": "10/15/2026"
  },
  "miamidade:1519636": {
