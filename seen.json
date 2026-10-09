@@ -58,18 +58,57 @@
   "reminded": [],
   "sale_date": "10/26/2026"
  },
- "miamidade:1515167": {
+ "broward:1523308": {
   "land_use": {
-   "code": "0081",
-   "desc": "VACANT RESIDENTIAL : VACANT LAND",
-   "land_val": 268,
-   "lot_sqft": 238,
-   "lot_src": "LOT_SIZE",
-   "total_val": 268
+   "code": "004",
+   "desc": "CONDOMINIUM",
+   "land_val": 0,
+   "lot_sqft": 116979,
+   "lot_src": "parcel shape",
+   "total_val": 103000
   },
   "ok": false,
   "reminded": [],
-  "sale_date": "10/08/2026"
+  "sale_date": "11/23/2026"
+ },
+ "broward:1523309": {
+  "land_use": {
+   "code": "004",
+   "desc": "CONDOMINIUM",
+   "land_val": 0,
+   "lot_sqft": 59056,
+   "lot_src": "parcel shape",
+   "total_val": 77480
+  },
+  "ok": false,
+  "reminded": [],
+  "sale_date": "11/23/2026"
+ },
+ "broward:1523310": {
+  "land_use": {
+   "code": "004",
+   "desc": "CONDOMINIUM",
+   "land_val": 0,
+   "lot_sqft": 621,
+   "lot_src": "LND_SQFOOT",
+   "total_val": 222220
+  },
+  "ok": false,
+  "reminded": [],
+  "sale_date": "11/23/2026"
+ },
+ "broward:1523312": {
+  "land_use": {
+   "code": "004",
+   "desc": "CONDOMINIUM",
+   "land_val": 0,
+   "lot_sqft": 36791,
+   "lot_src": "parcel shape",
+   "total_val": 73880
+  },
+  "ok": false,
+  "reminded": [],
+  "sale_date": "11/23/2026"
  },
  "miamidade:1516322": {
   "land_use": null,
