@@ -110,24 +110,6 @@
   "reminded": [],
   "sale_date": "11/23/2026"
  },
- "miamidade:1516322": {
-  "land_use": null,
-  "ok": true,
-  "reminded": [
-   7,
-   1
-  ],
-  "sale_date": "10/15/2026"
- },
- "miamidade:1516458": {
-  "land_use": null,
-  "ok": true,
-  "reminded": [
-   7,
-   1
-  ],
-  "sale_date": "10/15/2026"
- },
  "miamidade:1519636": {
   "land_use": {
    "code": "9981",
