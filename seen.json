@@ -16,7 +16,9 @@
    "total_val": 6640
   },
   "ok": true,
-  "reminded": [],
+  "reminded": [
+   7
+  ],
   "sale_date": "10/26/2026"
  },
  "broward:1517924": {
