@@ -1,4 +1,19 @@
 {
+ "broward:1515931": {
+  "land_use": {
+   "code": "004",
+   "desc": "CONDOMINIUM",
+   "land_val": 0,
+   "lot_sqft": 133839,
+   "lot_src": "parcel shape",
+   "total_val": 210090
+  },
+  "ok": false,
+  "reminded": [
+   7
+  ],
+  "sale_date": "10/26/2026"
+ },
  "broward:1516434": {
   "land_use": {
    "code": "000",
@@ -89,6 +104,49 @@
   "ok": false,
   "reminded": [],
   "sale_date": "10/26/2026"
+ },
+ "broward:1518621": {
+  "land_use": {
+   "code": "095",
+   "desc": "DOR USE CODE 095",
+   "land_val": 3300,
+   "lot_sqft": 32975,
+   "lot_src": "LND_SQFOOT",
+   "total_val": 3300
+  },
+  "ok": false,
+  "reminded": [
+   7
+  ],
+  "sale_date": "10/26/2026"
+ },
+ "broward:1518630": {
+  "land_use": {
+   "code": "094",
+   "desc": "DOR USE CODE 094",
+   "land_val": 11980,
+   "lot_sqft": 24015,
+   "lot_src": "LND_SQFOOT",
+   "total_val": 11980
+  },
+  "ok": false,
+  "reminded": [
+   7
+  ],
+  "sale_date": "10/26/2026"
+ },
+ "broward:1521049": {
+  "land_use": {
+   "code": "004",
+   "desc": "CONDOMINIUM",
+   "land_val": 0,
+   "lot_sqft": 32167,
+   "lot_src": "parcel shape",
+   "total_val": 214640
+  },
+  "ok": false,
+  "reminded": [],
+  "sale_date": "11/23/2026"
  },
  "broward:1523308": {
   "land_use": {
