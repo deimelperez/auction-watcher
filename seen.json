@@ -135,6 +135,19 @@
   ],
   "sale_date": "10/26/2026"
  },
+ "broward:1521020": {
+  "land_use": {
+   "code": "004",
+   "desc": "CONDOMINIUM",
+   "land_val": 0,
+   "lot_sqft": 80589,
+   "lot_src": "parcel shape",
+   "total_val": 127420
+  },
+  "ok": false,
+  "reminded": [],
+  "sale_date": "11/23/2026"
+ },
  "broward:1521049": {
   "land_use": {
    "code": "004",
