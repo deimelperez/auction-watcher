@@ -26,7 +26,8 @@ jobs:
           # comma-separated auction sites (public calendars, no login)
           BASE_URL: "https://www.miamidade.realforeclose.com,https://broward.realtaxdeed.com"
           AUCTION_TYPES: TAXDEED
-          MAX_BID: "25000"
+          MAX_BID: "25000"              # vacant lots: max opening bid
+          PROPERTY_MAX_BID: "100000"    # any non-condo property: max opening bid; 0 = off
           ZIPS: ""
           DAYS_AHEAD: "45"
           REMIND_DAYS: "7,1"            # reminders this many days before each sale
