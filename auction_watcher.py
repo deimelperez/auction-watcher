@@ -55,7 +55,10 @@ DATE_FORMAT = os.getenv("DATE_FORMAT", "%m/%d/%Y")
 DAYS_AHEAD = int(os.getenv("DAYS_AHEAD", "45"))
 
 AUCTION_TYPES = {t.strip().upper() for t in os.getenv("AUCTION_TYPES", "TAXDEED").split(",") if t.strip()}
-MAX_BID = float(os.getenv("MAX_BID", "0") or 0)          # 0 = no limit
+MAX_BID = float(os.getenv("MAX_BID", "0") or 0)          # max opening bid for vacant lots; 0 = no limit
+# Second search: any non-condo property (houses, townhouses, duplexes, lots, commercial...)
+# with an opening bid at or under this. 0 = turn this search off.
+PROPERTY_MAX_BID = float(os.getenv("PROPERTY_MAX_BID", "100000") or 0)
 ZIPS = {z.strip() for z in os.getenv("ZIPS", "").split(",") if z.strip()}  # empty = any
 
 SEEN_FILE = Path(os.getenv("SEEN_FILE", "seen.json"))
@@ -171,7 +174,8 @@ def parse_response(text: str, sale_date: str = "") -> list[dict]:
 def keep(item: dict) -> bool:
     if AUCTION_TYPES and item["type"].replace(" ", "") not in {t.replace(" ", "") for t in AUCTION_TYPES}:
         return False
-    if MAX_BID and item["bid"] is not None and item["bid"] > MAX_BID:
+    limit = max(MAX_BID, PROPERTY_MAX_BID) if MAX_BID else 0  # 0 = lots have no limit, so none here
+    if limit and item["bid"] is not None and item["bid"] > limit:
         return False
     if ZIPS and item["zip"] and item["zip"] not in ZIPS:
         return False
@@ -506,7 +510,7 @@ def enrich(items: list[dict]) -> None:
                 "lot_src": src,
             }
             # comparable sales only for lots that pass the filter (keeps requests low)
-            if land_use_ok(item):
+            if land_use_ok(item) and bid_under(item, MAX_BID):
                 try:
                     item["land_use"]["comps"] = find_comps(s, county, a.get("_centroid"), a.get("_pid") or folio)
                 except Exception as e:
@@ -515,6 +519,28 @@ def enrich(items: list[dict]) -> None:
             print(f"[land use] {county} {folio}: {item['land_use']['code']} {item['land_use']['desc']!r}, "
                   f"lot {item['land_use']['lot_sqft']} sq ft ({src or 'unknown'})")
         time.sleep(1)
+
+
+def is_excluded(item: dict) -> bool:
+    desc = ((item.get("land_use") or {}).get("desc") or "").upper()
+    return any(x in desc for x in EXCLUDE_LAND_USE)
+
+
+def bid_under(item: dict, limit: float) -> bool:
+    return not limit or item.get("bid") is None or item["bid"] <= limit
+
+
+def category(item: dict) -> str | None:
+    """'lot' = vacant residential lot to build on (the original search),
+    'property' = any non-condo property under PROPERTY_MAX_BID, None = no alert."""
+    if land_use_ok(item) and bid_under(item, MAX_BID):
+        return "lot"
+    if PROPERTY_MAX_BID and not is_excluded(item) and bid_under(item, PROPERTY_MAX_BID):
+        return "property"
+    return None
+
+
+CAT_LABEL = {"lot": "🌱 Vacant lot", "property": f"🏠 Property under ${PROPERTY_MAX_BID:,.0f}"}
 
 
 def land_use_ok(item: dict) -> bool:
@@ -568,6 +594,7 @@ def fmt(item: dict) -> str:
     bid = f"${item['bid']:,.2f}" if item["bid"] is not None else "n/a"
     assessed = f"${item['assessed']:,.0f}" if item["assessed"] is not None else "n/a"
     lines = [
+        *([CAT_LABEL[item["cat"]]] if item.get("cat") in CAT_LABEL else []),
         f"{item['sale_date']}  {item.get('county', '').upper()}  {item['type']}  #{item['case']}"
         + (f"  [{item['status']}]" if item.get("status") else ""),
         f"Parcel: {item['parcel']}",
@@ -620,7 +647,10 @@ def links_of(item: dict) -> list[tuple[str, str]]:
         if folio := folio_of(item):
             out.append(("Property", f"https://apps.miamidadepa.gov/propertysearch/#/?folio={folio}"))
     elif item.get("county") == "broward" and item["parcel"] and not item["parcel"].upper().startswith("MULTIPLE"):
-        out.append(("Property", "https://web.bcpa.net/BcpaClient/"))
+        folio = re.sub(r"\D", "", item["parcel"])  # 514119-06-0741 -> 514119060741
+        if folio:
+            out.append(("Property", f"https://bcpa.net/RecInfo.asp?URL_Folio={folio}"))
+            out.append(("Map", f"https://gisweb-adapters.bcpa.net/bcpawebmap_ex/bcpawebmap.aspx?FOLIO={folio}"))
     return out
 
 
@@ -629,6 +659,10 @@ def fmt_html(item: dict) -> str:
     e = html.escape
     lu = item.get("land_use") or {}
     head = f"<b>{e(item['sale_date'][:5])} · {e(item.get('county', '').upper())} · #{e(item['case'])}</b>"
+    if item.get("cat") == "property":
+        head = "🏠 " + head
+    elif item.get("cat") == "lot":
+        head = "🌱 " + head
     addr = f"{item['address'] or 'no address'}, {item['city']}".strip(", ")
     bid = f"${item['bid']:,.0f}" if item.get("bid") is not None else "n/a"
     lines = [head, e(addr), f"Opening bid <b>{bid}</b> · parcel <code>{e(item['parcel'])}</code>"]
@@ -732,15 +766,21 @@ def main() -> None:
     seen = load_seen()
     today = date.today()
 
-    # 1) New listings: look up land use once, alert if they pass the filter
-    new = [i for i in items if i["id"] not in seen]
+    # 1) New listings: look up land use once, alert if they fit a category.
+    # Entries saved before categories existed ("cat" missing) that didn't match then
+    # are checked again, since the under-$100K property search may match them now.
+    new = [i for i in items if i["id"] not in seen
+           or ("cat" not in seen[i["id"]] and not seen[i["id"]].get("ok"))]
     enrich(new)  # only look up parcels we haven't seen, to keep requests low
-    new_alerts = [i for i in new if land_use_ok(i)]
+    for i in new:
+        i["cat"] = category(i)
+    new_alerts = [i for i in new if i["cat"]]
     for i in new:
         d = days_until(i["sale_date"], today)
         seen[i["id"]] = {
             "sale_date": i["sale_date"],
-            "ok": land_use_ok(i),
+            "ok": bool(i["cat"]),
+            "cat": i["cat"],
             "land_use": i.get("land_use"),
             # a listing first found inside a reminder window already got the "new" alert
             "reminded": [r for r in REMIND_DAYS if d is not None and d <= r],
@@ -754,6 +794,9 @@ def main() -> None:
             continue
         st["sale_date"] = i["sale_date"]  # the sale may have been rescheduled
         i["land_use"] = st.get("land_use")
+        if "cat" not in st:  # saved before categories existed: it matched the lot search
+            st["cat"] = "lot"
+        i["cat"] = st["cat"]
         d = days_until(i["sale_date"], today)
         if d is None:
             continue
@@ -766,12 +809,20 @@ def main() -> None:
     print(f"{len(items)} matching, {len(new)} new, {len(new_alerts)} new alerts, "
           + ", ".join(f"{len(v)} reminders at {k}d" for k, v in reminders.items()))
 
-    if new_alerts:
-        notify(new_alerts, f"🆕 {len(new_alerts)} new auction listing(s)", args.dry_run, seen)
+    def by_cat(group: list[dict]):
+        for cat in ("lot", "property"):
+            g = [i for i in group if i.get("cat") == cat]
+            if g:
+                yield cat, g
+
+    for cat, g in by_cat(new_alerts):
+        what = "vacant lot(s)" if cat == "lot" else f"non-condo propert{'y' if len(g) == 1 else 'ies'} under ${PROPERTY_MAX_BID:,.0f}"
+        notify(g, f"🆕 {len(g)} new {what}", args.dry_run, seen)
     for r, group in sorted(reminders.items(), reverse=True):
-        if group:
-            when = "tomorrow" if r == 1 else f"in {r} days"
-            notify(group, f"⏰ {len(group)} auction(s) {when}", args.dry_run, seen)
+        when = "tomorrow" if r == 1 else f"in {r} days"
+        for cat, g in by_cat(group):
+            what = "vacant lot" if cat == "lot" else "property"
+            notify(g, f"⏰ {len(g)} {what} auction(s) {when}", args.dry_run, seen)
 
     if not args.dry_run:
         save_seen(seen)
