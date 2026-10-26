@@ -383,5 +383,68 @@
   "ok": true,
   "reminded": [],
   "sale_date": "11/12/2026"
+ },
+ "miamidade:1525192": {
+  "cat": "property",
+  "land_use": {
+   "code": "9981",
+   "desc": "ACREAGE NOT CLASSIFIED AG : VACANT LAND",
+   "land_val": 938,
+   "lot_sqft": 54450,
+   "lot_src": "LOT_SIZE",
+   "total_val": 938
+  },
+  "ok": true,
+  "reminded": [],
+  "sale_date": "12/10/2026"
+ },
+ "miamidade:1525194": {
+  "cat": "property",
+  "land_use": {
+   "code": "9981",
+   "desc": "ACREAGE NOT CLASSIFIED AG : VACANT LAND",
+   "land_val": 938,
+   "lot_sqft": 54450,
+   "lot_src": "LOT_SIZE",
+   "total_val": 938
+  },
+  "ok": true,
+  "reminded": [],
+  "sale_date": "12/10/2026"
+ },
+ "miamidade:1525198": {
+  "cat": "property",
+  "land_use": {
+   "code": "9981",
+   "desc": "ACREAGE NOT CLASSIFIED AG : VACANT LAND",
+   "land_val": 3040,
+   "lot_sqft": 66211,
+   "lot_src": "LOT_SIZE",
+   "total_val": 3040
+  },
+  "ok": true,
+  "reminded": [],
+  "sale_date": "12/10/2026"
+ },
+ "miamidade:1526257": {
+  "cat": "lot",
+  "land_use": {
+   "code": "0081",
+   "comps": {
+    "high_ppsf": 13028.95,
+    "low_ppsf": 2.0,
+    "median_ppsf": 1497.74,
+    "n": 591,
+    "radius_ft": 2640.0
+   },
+   "desc": "VACANT RESIDENTIAL : VACANT LAND",
+   "land_val": 140000,
+   "lot_sqft": 9000,
+   "lot_src": "LOT_SIZE",
+   "total_val": 140000
+  },
+  "ok": true,
+  "reminded": [],
+  "sale_date": "12/10/2026"
  }
 }
