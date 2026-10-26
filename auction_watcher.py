@@ -16,6 +16,7 @@ Alerts: one when a listing first appears, then reminders REMIND_DAYS before the 
 Config comes from environment variables (see CONFIG below).
 """
 import argparse
+import csv
 import html
 import json
 import os
@@ -46,8 +47,19 @@ CALENDAR_PATH = os.getenv("CALENDAR_PATH", "/index.cfm?zaction=USER&zmethod=CALE
 # The site's own "next month" link uses a ColdFusion timestamp: selCalDate={ts '2026-10-01 00:00:00'}
 CALENDAR_MONTH_PARAM = os.getenv("CALENDAR_MONTH_PARAM",
                                  "&selCalDate=%7Bts%20%27{y}%2D{m:02d}%2D01%2000%3A00%3A00%27%7D")
-DAY_LOAD_PATH = ("/index.cfm?zaction=AUCTION&Zmethod=UPDATE&FNC=LOAD&AREA=W&PageDir={page_dir}"
-                 "&doR=1&bypassPage=1&test=1&tx={ms}&_={ms}")
+# Page 1: PageDir=0&doR=1&bypassPage=1. Next pages: PageDir=1&doR=0&bypassPage=0
+# (with bypassPage=1 the site just returns page 1 again).
+# AREA: W = waiting (upcoming), R = running, C = closed (sold / redeemed / canceled).
+DAY_LOAD_PATH = ("/index.cfm?zaction=AUCTION&Zmethod=UPDATE&FNC=LOAD&AREA={area}&PageDir={page_dir}"
+                 "&doR={dor}&bypassPage={bypass}&test=1&tx={ms}&_={ms}")
+# Status of the items on the current page (sold amount, sold to, redeemed, canceled...)
+STATUS_PATH = "/index.cfm?zaction=AUCTION&ZMETHOD=UPDATE&FNC=UPDATE&ref={ids},&tx={ms}"
+
+
+def day_page_url(area: str, page: int, ms: int) -> str:
+    if page == 0:
+        return DAY_LOAD_PATH.format(area=area, page_dir=0, dor=1, bypass=1, ms=ms)
+    return DAY_LOAD_PATH.format(area=area, page_dir=1, dor=0, bypass=0, ms=ms)
 
 SKIP_STATUSES = {s.strip().upper() for s in os.getenv("SKIP_STATUSES", "CANCELED,CANCELLED").split(",") if s.strip()}
 MAX_PAGES = int(os.getenv("MAX_PAGES", "10"))
@@ -62,6 +74,10 @@ PROPERTY_MAX_BID = float(os.getenv("PROPERTY_MAX_BID", "100000") or 0)
 ZIPS = {z.strip() for z in os.getenv("ZIPS", "").split(",") if z.strip()}  # empty = any
 
 SEEN_FILE = Path(os.getenv("SEEN_FILE", "seen.json"))
+# Sale results (one row per tax deed listing, every listing, not just alerted ones)
+RESULTS_FILE = Path(os.getenv("RESULTS_FILE", "results.csv"))
+# Send a short Telegram/email summary of the day's results (sold items) after collecting them
+RESULTS_NOTIFY = os.getenv("RESULTS_NOTIFY", "1") not in ("0", "", "false", "no")
 # Reminder alerts: days before the sale (default: a week before and a day before).
 REMIND_DAYS = sorted({int(d) for d in os.getenv("REMIND_DAYS", "7,1").split(",") if d.strip()}, reverse=True)
 
@@ -277,7 +293,7 @@ def fetch_site(site: str) -> list[dict]:
             for page in range(MAX_PAGES):
                 time.sleep(2)
                 ms = int(time.time() * 1000)
-                r = s.get(base + DAY_LOAD_PATH.format(page_dir=0 if page == 0 else 1, ms=ms),
+                r = s.get(base + day_page_url("W", page, ms),
                           timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
                 r.raise_for_status()
                 if '"retHTML"' not in r.text:
@@ -560,6 +576,172 @@ def land_use_ok(item: dict) -> bool:
 
 
 # ----------------------------------------------------------------------------
+# SALE RESULTS
+# Past auction days disappear from the site's calendar, so results are collected
+# the same day, after the sale closes (the evening run: --results).
+# ----------------------------------------------------------------------------
+RESULT_FIELDS = [
+    "sale_date", "county", "aid", "case", "certificate", "parcel", "address", "city", "zip",
+    "land_use_code", "land_use", "lot_sqft", "pa_land_val", "pa_total_val", "assessed",
+    "opening_bid", "status", "sold_to", "sold_amount", "sold_time", "x_opening",
+    "comps_n", "comps_median_ppsf", "est_land_value", "x_est_value", "listing", "collected_at",
+]
+
+
+def parse_status(a: dict) -> dict | None:
+    """One item from the site's status JSON -> {status, sold_to, sold_amount, sold_time}.
+    None if the sale isn't final yet (not started / running)."""
+    A, B = (a.get("A") or "").strip(), (a.get("B") or "").strip()
+    if A == "Auction Sold":
+        return {"status": "Sold", "sold_to": (a.get("ST") or "").strip(),
+                "sold_amount": money(a.get("D")), "sold_time": B}
+    if A == "B":  # template "Auction Status": B holds the status text (Redeemed, Canceled...)
+        return {"status": B, "sold_to": "", "sold_amount": None, "sold_time": ""} if B else None
+    if A in ("A", "Time Remaining", ""):  # "Auction Starts" / running
+        return None
+    return {"status": A, "sold_to": (a.get("ST") or "").strip(), "sold_amount": money(a.get("D")),
+            "sold_time": B}
+
+
+def auction_today(s: requests.Session, base: str, day: date) -> bool:
+    """True if the calendar shows a sale of a watched type on this day."""
+    r = s.get(base + CALENDAR_PATH + CALENDAR_MONTH_PARAM.format(m=day.month, y=day.year), timeout=30)
+    r.raise_for_status()
+    ds = day.strftime("%m/%d/%Y")
+    for d, box in re.findall(r'dayid="(\d{2}/\d{2}/\d{4})"(.*?)</div>', r.text, re.I | re.S):
+        if d == ds:
+            return calendar_day_wanted(box)
+    return False
+
+
+def fetch_results_site(site: str, day: date) -> list[dict]:
+    base = site.split("|")[0].rstrip("/")
+    county = county_of(base)
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    s.get(base, timeout=30).raise_for_status()
+    if not auction_today(s, base, day):
+        print(f"[results] {county}: no sale on {day:%m/%d/%Y}")
+        return []
+    ds = day.strftime(DATE_FORMAT)
+    time.sleep(2)
+    s.get(base + PREVIEW_PATH.format(date=ds), timeout=30).raise_for_status()  # select the day
+    out, ids, pending = [], set(), 0
+    for page in range(MAX_PAGES * 3):
+        time.sleep(2)
+        ms = int(time.time() * 1000)
+        r = s.get(base + day_page_url("C", page, ms), timeout=30,
+                  headers={"X-Requested-With": "XMLHttpRequest"})
+        r.raise_for_status()
+        if '"retHTML"' not in r.text:
+            break
+        batch = [i for i in parse_response(r.text, ds) if f"{county}:{i['id']}" not in ids]
+        if not batch:
+            break
+        time.sleep(1)
+        st = s.get(base + STATUS_PATH.format(ids=",".join(i["id"] for i in batch), ms=int(time.time() * 1000)),
+                   timeout=30, headers={"X-Requested-With": "XMLHttpRequest"})
+        st.raise_for_status()
+        status = {a.get("AID"): a for a in (json.loads(st.text.strip(), strict=False).get("ADATA") or {}).get("AITEM", [])}
+        for i in batch:
+            aid = i["id"]
+            ids.add(f"{county}:{aid}")
+            res = parse_status(status.get(aid) or {})
+            if not res:
+                pending += 1
+                continue
+            i.update({"id": f"{county}:{aid}", "aid": aid, "county": county,
+                      "link": base + DETAIL_PATH.format(aid=aid), **res})
+            out.append(i)
+    print(f"[results] {county} {ds}: {len(out)} final, {pending} not final yet")
+    return out
+
+
+def load_results() -> dict:
+    try:
+        with RESULTS_FILE.open(newline="") as f:
+            return {f"{r['county']}:{r['aid']}": r for r in csv.DictReader(f)}
+    except FileNotFoundError:
+        return {}
+
+
+def result_row(i: dict) -> dict:
+    lu = i.get("land_use") or {}
+    c = lu.get("comps") or {}
+    est = c.get("median_ppsf") * lu["lot_sqft"] if c.get("n") and lu.get("lot_sqft") else None
+    amt, bid = i.get("sold_amount"), i.get("bid")
+    r2 = lambda x: "" if x is None else round(x, 2)
+    return {
+        "sale_date": i["sale_date"], "county": i["county"], "aid": i["aid"], "case": i["case"],
+        "certificate": i["raw"].get("Certificate #", ""), "parcel": i["parcel"], "address": i["address"],
+        "city": i["city"], "zip": i["zip"],
+        "land_use_code": lu.get("code", ""), "land_use": lu.get("desc", ""), "lot_sqft": lu.get("lot_sqft") or "",
+        "pa_land_val": r2(lu.get("land_val")), "pa_total_val": r2(lu.get("total_val")), "assessed": r2(i.get("assessed")),
+        "opening_bid": r2(bid), "status": i["status"], "sold_to": i["sold_to"], "sold_amount": r2(amt),
+        "sold_time": i["sold_time"],
+        "x_opening": r2(amt / bid) if amt and bid else "",
+        "comps_n": c.get("n", ""), "comps_median_ppsf": c.get("median_ppsf", ""),
+        "est_land_value": r2(est), "x_est_value": r2(amt / est) if amt and est else "",
+        "listing": i["link"], "collected_at": datetime.now().isoformat(timespec="minutes"),
+    }
+
+
+def collect_results(day: date, dry_run: bool) -> None:
+    rows = load_results()
+    found = []
+    for site in BASE_URLS:
+        try:
+            found.extend(fetch_results_site(site, day))
+        except Exception as e:
+            print(f"[error] results {site}: {e}", file=sys.stderr)
+    types = {t.replace(" ", "") for t in AUCTION_TYPES}
+    new = [i for i in found if i["id"] not in rows and (not types or i["type"].replace(" ", "") in types)]
+    # land use: reuse what the morning run already looked up, look up the rest
+    seen = load_seen()
+    todo = []
+    for i in new:
+        lu = (seen.get(i["id"]) or {}).get("land_use")
+        if lu:
+            i["land_use"] = lu
+        else:
+            todo.append(i)
+    enrich(todo)
+    for i in new:
+        rows[i["id"]] = result_row(i)
+    print(f"[results] {len(new)} new result(s), {len(rows)} total in {RESULTS_FILE}")
+    if not dry_run:
+        ordered = sorted(rows.values(), key=lambda r: (datetime.strptime(r["sale_date"], DATE_FORMAT), r["county"], r["case"]))
+        with RESULTS_FILE.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=RESULT_FIELDS, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(ordered)
+    sold = [i for i in new if i["status"] == "Sold"]
+    if new and RESULTS_NOTIFY:
+        lines = []
+        for county in sorted({i["county"] for i in new}):
+            c_new = [i for i in new if i["county"] == county]
+            c_sold = [i for i in sold if i["county"] == county]
+            counts = {}
+            for i in c_new:
+                counts[i["status"]] = counts.get(i["status"], 0) + 1
+            lines.append(f"{county.upper()}: " + ", ".join(f"{n} {k.lower()}" for k, n in sorted(counts.items(), key=lambda x: -x[1])))
+            for i in sorted(c_sold, key=lambda x: -(x.get("sold_amount") or 0)):
+                lu = (i.get("land_use") or {}).get("desc", "")
+                x = f" ({i['sold_amount'] / i['bid']:.1f}x opening)" if i.get("sold_amount") and i.get("bid") else ""
+                amt = f"${i['sold_amount']:,.0f}" if i.get("sold_amount") is not None else "n/a"
+                lines.append(f"  #{i['case']} {i['address'] or 'no address'} {i['city']} · {lu.title()} · "
+                             f"opened ${i['bid'] or 0:,.0f} → sold {amt}{x} to {i['sold_to']}")
+        text = f"📊 Auction results {day:%m/%d}\n" + "\n".join(lines)
+        if dry_run or not (TELEGRAM_TOKEN or SMTP_USER):
+            print(text)
+        else:
+            if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+                send_telegram(text)
+            if SMTP_USER and SMTP_PASS:
+                send_email(f"📊 Auction results {day:%m/%d}", text)
+
+
+# ----------------------------------------------------------------------------
 # STATE + ALERTS
 # ----------------------------------------------------------------------------
 def load_seen() -> dict:
@@ -747,7 +929,16 @@ def main() -> None:
     ap.add_argument("--sample", help="parse a saved JSON response instead of fetching")
     ap.add_argument("--dry-run", action="store_true", help="print alerts instead of sending")
     ap.add_argument("--folio", help="test the land-use lookup for one folio and exit")
+    ap.add_argument("--results", action="store_true",
+                    help="collect today's sale results into results.csv (run after the sales close)")
+    ap.add_argument("--date", help="with --results: sale date MM/DD/YYYY (default today); only "
+                                   "works while the site still shows that day")
     args = ap.parse_args()
+
+    if args.results:
+        day = datetime.strptime(args.date, "%m/%d/%Y").date() if args.date else date.today()
+        collect_results(day, args.dry_run)
+        return
 
     if args.folio:
         s = requests.Session()
