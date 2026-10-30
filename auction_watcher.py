@@ -742,6 +742,189 @@ def collect_results(day: date, dry_run: bool) -> None:
 
 
 # ----------------------------------------------------------------------------
+# WEEKLY REPORT (Saturdays): what sold this week, what it means for bidding,
+# and which of your matches come up next week.
+# ----------------------------------------------------------------------------
+def _f(x) -> float | None:
+    try:
+        return float(x) if x not in (None, "") else None
+    except ValueError:
+        return None
+
+
+def _median(v: list[float]) -> float | None:
+    v = sorted(v)
+    if not v:
+        return None
+    m = len(v) // 2
+    return v[m] if len(v) % 2 else (v[m - 1] + v[m]) / 2
+
+
+def _pct(v: list[float], q: float) -> float | None:
+    v = sorted(v)
+    if not v:
+        return None
+    k = (len(v) - 1) * q
+    lo, hi = int(k), min(int(k) + 1, len(v) - 1)
+    return v[lo] + (v[hi] - v[lo]) * (k - lo)
+
+
+def _group(desc: str) -> str:
+    d = (desc or "").upper()
+    if "VACANT" in d and "RESIDENTIAL" in d:
+        return "Vacant residential"
+    if "VACANT" in d:
+        return "Other vacant"
+    if "CONDO" in d:
+        return "Condo"
+    if "SINGLE FAMILY" in d:
+        return "Single family"
+    if "MOBILE" in d:
+        return "Mobile home"
+    if "MULTI" in d:
+        return "Multi-family"
+    return "Other" if d else "Unknown"
+
+
+def _city(r: dict) -> str:
+    return (r.get("city") or "").split(",")[0].strip().title() or "?"
+
+
+COUNTY_NAME = {"miamidade": "Miami-Dade", "broward": "Broward"}
+
+
+def weekly_report(today: date) -> str:
+    rows = list(load_results().values())
+    for r in rows:
+        r["_d"] = datetime.strptime(r["sale_date"], DATE_FORMAT).date()
+        r["_amt"], r["_bid"] = _f(r.get("sold_amount")), _f(r.get("opening_bid"))
+        r["_x"], r["_xe"] = _f(r.get("x_opening")), _f(r.get("x_est_value"))
+        r["_g"] = _group(r.get("land_use"))
+        r["_3p"] = "3RD PARTY" in (r.get("sold_to") or "").upper()
+    start = today - timedelta(days=7)
+    week = [r for r in rows if start <= r["_d"] < today]
+    L = [f"📈 Weekly auction report · {start:%b %d} – {today - timedelta(days=1):%b %d}"]
+
+    if not rows:
+        L += ["", "No results saved yet. Check that the auction-results Action is running "
+                  "(Actions tab) and that results.csv is being committed."]
+        return "\n".join(L)
+
+    # --- this week
+    L.append("")
+    if not week:
+        L.append("No sales this week.")
+    for county in sorted({r["county"] for r in week}):
+        c = [r for r in week if r["county"] == county]
+        sold = [r for r in c if r["status"] == "Sold"]
+        third = [r for r in sold if r["_3p"]]
+        red = sum(1 for r in c if r["status"].upper().startswith("REDEEM"))
+        days = len({r["_d"] for r in c})
+        line = (f"{COUNTY_NAME.get(county, county.title()).upper()}: {len(c)} listings over {days} sale day(s), {len(sold)} sold "
+                f"({len(third)} to outside bidders), {red} redeemed ({red / len(c):.0%})")
+        L.append(line)
+        xs = [r["_x"] for r in third if r["_x"]]
+        if xs:
+            L.append(f"  Outside bidders paid a median {_median(xs):.1f}x the opening bid "
+                     f"(range {min(xs):.1f}x–{max(xs):.1f}x)")
+
+    # --- notable sales this week
+    third_wk = sorted([r for r in week if r["status"] == "Sold" and r["_3p"] and r["_amt"]],
+                      key=lambda r: -r["_amt"])
+    lots_wk = [r for r in week if r["status"] == "Sold" and r["_g"] == "Vacant residential"]
+    if third_wk:
+        L += ["", "Top sales:"]
+        for r in third_wk[:5]:
+            lot = f", {int(_f(r['lot_sqft'])):,} sq ft" if _f(r.get("lot_sqft")) else ""
+            L.append(f"  ${r['_amt']:,.0f} · {r['address'] or 'no address'}, {_city(r)} · {r['_g']}{lot}"
+                     + (f" · {r['_x']:.1f}x opening" if r["_x"] else ""))
+    if lots_wk:
+        L += ["", "Vacant residential lots sold:"]
+        for r in sorted(lots_wk, key=lambda r: -(r["_amt"] or 0))[:8]:
+            sq = _f(r.get("lot_sqft"))
+            ppsf = f", ${r['_amt'] / sq:,.2f}/sq ft" if r["_amt"] and sq else ""
+            vs = f", {r['_xe']:.0%} of comps value" if r["_xe"] else ""
+            who = "outside bidder" if r["_3p"] else "cert holder (no competition)"
+            L.append(f"  {r['address'] or 'no address'}, {_city(r)}: opened ${r['_bid'] or 0:,.0f} → "
+                     f"${r['_amt'] or 0:,.0f}{ppsf}{vs} · {who}")
+    cheap_wk = [r for r in week if r["status"] == "Sold" and r["_g"] not in ("Condo", "Vacant residential")
+                and r["_amt"] and r["_amt"] <= PROPERTY_MAX_BID]
+    if cheap_wk:
+        L += ["", f"Non-condo properties sold under ${PROPERTY_MAX_BID:,.0f}:"]
+        for r in sorted(cheap_wk, key=lambda r: r["_amt"])[:8]:
+            val = _f(r.get("pa_total_val"))
+            v = f" (PA value ${val:,.0f}, {r['_amt'] / val:.0%})" if val else ""
+            L.append(f"  ${r['_amt']:,.0f} · {r['address'] or 'no address'}, {_city(r)} · {r['_g']}{v}")
+
+    # --- all data so far: bidding guide
+    first = min(r["_d"] for r in rows)
+    third_all = [r for r in rows if r["status"] == "Sold" and r["_3p"] and r["_x"]]
+    L += ["", f"Bidding guide (all {len(rows)} results since {first:%b %d}):"]
+    if len(third_all) < 5:
+        L.append(f"  Only {len(third_all)} outside-bidder sale(s) so far; numbers get useful after ~20.")
+    for g in ("Vacant residential", "Single family", "Multi-family", "Other vacant", "Other"):
+        xs = [r["_x"] for r in third_all if r["_g"] == g]
+        if len(xs) >= 3:
+            L.append(f"  {g}: median {_median(xs):.1f}x opening, 75% sold at or below {_pct(xs, .75):.1f}x (n={len(xs)})")
+    lot_ppsf = [r["_amt"] / _f(r["lot_sqft"]) for r in rows
+                if r["status"] == "Sold" and r["_3p"] and r["_g"] == "Vacant residential"
+                and r["_amt"] and _f(r.get("lot_sqft"))]
+    if len(lot_ppsf) >= 3:
+        L.append(f"  Vacant lots: median ${_median(lot_ppsf):,.2f}/sq ft paid at auction (n={len(lot_ppsf)})")
+    xe = [r["_xe"] for r in third_all if r["_xe"] and r["_g"] == "Vacant residential"]
+    if len(xe) >= 3:
+        L.append(f"  Vacant lots sell for a median {_median(xe):.0%} of the comps value")
+    by_city: dict[str, list[float]] = {}
+    for r in third_all:
+        by_city.setdefault(_city(r), []).append(r["_x"])
+    hot = sorted(((c, _median(v), len(v)) for c, v in by_city.items() if len(v) >= 3), key=lambda t: -t[1])
+    if hot:
+        L.append("  Most competitive cities: " + ", ".join(f"{c} {m:.1f}x (n={n})" for c, m, n in hot[:4]))
+    for county in sorted({r["county"] for r in rows}):
+        c = [r for r in rows if r["county"] == county]
+        red = sum(1 for r in c if r["status"].upper().startswith("REDEEM"))
+        no_comp = sum(1 for r in c if r["status"] == "Sold" and not r["_3p"])
+        L.append(f"  {COUNTY_NAME.get(county, county.title())}: {red / len(c):.0%} of listings are redeemed before the sale, "
+                 f"{no_comp / len(c):.0%} go to the cert holder with no bids")
+
+    # --- next week: your matches
+    seen = load_seen()
+    nxt = []
+    for k, v in seen.items():
+        if k.startswith("_") or not v.get("ok"):
+            continue
+        d = days_until(v.get("sale_date", ""), today)
+        if d is not None and 0 <= d <= 7:
+            nxt.append((d, k, v))
+    L += ["", f"Your matches coming up in the next 7 days: {len(nxt)}"]
+    for d, k, v in sorted(nxt, key=lambda t: t[0])[:10]:
+        cat = "🌱" if v.get("cat") == "lot" else "🏠"
+        desc = ((v.get("land_use") or {}).get("desc") or "").title()
+        bid = f"opening ${v['bid']:,.0f}" if v.get("bid") else ""
+        where = ", ".join(x for x in (v.get("address"), (v.get("city") or "").split(",")[0].title()) if x)
+        L.append(f"  {cat} {v['sale_date'][:5]} {COUNTY_NAME.get(k.split(':')[0], k.split(':')[0]).upper()} · {where or v.get('parcel') or '#' + k.split(':')[-1]}"
+                 + (f" · {desc}" if desc else "") + (f" · {bid}" if bid else ""))
+        # what similar things sold for
+        g = _group((v.get("land_use") or {}).get("desc"))
+        xs = [r["_x"] for r in third_all if r["_g"] == g]
+        if v.get("bid") and len(xs) >= 3:
+            L.append(f"     similar {g.lower()} sales suggest ≈ ${v['bid'] * _median(xs):,.0f} "
+                     f"(up to ${v['bid'] * _pct(xs, .75):,.0f})")
+    return "\n".join(L)
+
+
+def send_weekly(today: date, dry_run: bool) -> None:
+    text = weekly_report(today)
+    if dry_run or not (TELEGRAM_TOKEN or SMTP_USER):
+        print(text)
+        return
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        send_telegram(text)
+    if SMTP_USER and SMTP_PASS:
+        send_email(f"📈 Weekly auction report {today:%m/%d}", text)
+
+
+# ----------------------------------------------------------------------------
 # STATE + ALERTS
 # ----------------------------------------------------------------------------
 def load_seen() -> dict:
@@ -929,11 +1112,16 @@ def main() -> None:
     ap.add_argument("--sample", help="parse a saved JSON response instead of fetching")
     ap.add_argument("--dry-run", action="store_true", help="print alerts instead of sending")
     ap.add_argument("--folio", help="test the land-use lookup for one folio and exit")
+    ap.add_argument("--weekly", action="store_true", help="send the weekly results report")
     ap.add_argument("--results", action="store_true",
                     help="collect today's sale results into results.csv (run after the sales close)")
     ap.add_argument("--date", help="with --results: sale date MM/DD/YYYY (default today); only "
                                    "works while the site still shows that day")
     args = ap.parse_args()
+
+    if args.weekly:
+        send_weekly(date.today(), args.dry_run)
+        return
 
     if args.results:
         day = datetime.strptime(args.date, "%m/%d/%Y").date() if args.date else date.today()
@@ -975,6 +1163,8 @@ def main() -> None:
             "land_use": i.get("land_use"),
             # a listing first found inside a reminder window already got the "new" alert
             "reminded": [r for r in REMIND_DAYS if d is not None and d <= r],
+            "bid": i.get("bid"), "address": i.get("address"), "city": i.get("city"),
+            "parcel": i.get("parcel"), "link": i.get("link"),
         }
 
     # 2) Reminders: still-listed items (so cancelled sales drop out) whose sale is N days away
