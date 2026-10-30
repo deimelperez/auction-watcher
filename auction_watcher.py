@@ -77,7 +77,7 @@ SEEN_FILE = Path(os.getenv("SEEN_FILE", "seen.json"))
 # Sale results (one row per tax deed listing, every listing, not just alerted ones)
 RESULTS_FILE = Path(os.getenv("RESULTS_FILE", "results.csv"))
 # Send a short Telegram/email summary of the day's results (sold items) after collecting them
-RESULTS_NOTIFY = os.getenv("RESULTS_NOTIFY", "1") not in ("0", "", "false", "no")
+RESULTS_NOTIFY = os.getenv("RESULTS_NOTIFY", "0") not in ("0", "", "false", "no")  # 0 = Saturday report only
 # Each results run re-checks sale days this far back, so a missed run is caught up.
 RESULTS_DAYS_BACK = int(os.getenv("RESULTS_DAYS_BACK", "7"))
 # Reminder alerts: days before the sale (default: a week before and a day before).
@@ -588,7 +588,7 @@ RESULT_FIELDS = [
     "sale_date", "county", "aid", "case", "certificate", "parcel", "address", "city", "zip",
     "land_use_code", "land_use", "lot_sqft", "pa_land_val", "pa_total_val", "assessed",
     "opening_bid", "status", "sold_to", "sold_amount", "sold_time", "x_opening",
-    "comps_n", "comps_median_ppsf", "est_land_value", "x_est_value", "listing", "collected_at",
+    "comps_n", "comps_median_ppsf", "est_land_value", "x_est_value", "listing", "property_link", "collected_at",
 ]
 
 
@@ -703,7 +703,9 @@ def result_row(i: dict) -> dict:
         "x_opening": r2(amt / bid) if amt and bid else "",
         "comps_n": c.get("n", ""), "comps_median_ppsf": c.get("median_ppsf", ""),
         "est_land_value": r2(est), "x_est_value": r2(amt / est) if amt and est else "",
-        "listing": i["link"], "collected_at": datetime.now().isoformat(timespec="minutes"),
+        "listing": i["link"],
+        "property_link": next((u for n, u in property_links(i["county"], i["parcel"]) if n == "Property"), ""),
+        "collected_at": datetime.now().isoformat(timespec="minutes"),
     }
 
 
@@ -735,6 +737,9 @@ def collect_results(start: date, end: date, dry_run: bool) -> None:
         with RESULTS_FILE.open("w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=RESULT_FIELDS, extrasaction="ignore")
             w.writeheader()
+            for r in ordered:  # rows saved before this column existed
+                if not r.get("property_link"):
+                    r["property_link"] = next((u for n, u in property_links(r["county"], r["parcel"]) if n == "Property"), "")
             w.writerows(ordered)
     sold = [i for i in new if i["status"] == "Sold"]
     if new and RESULTS_NOTIFY:
@@ -814,135 +819,421 @@ def _city(r: dict) -> str:
 COUNTY_NAME = {"miamidade": "Miami-Dade", "broward": "Broward"}
 
 
-def weekly_report(today: date) -> str:
+def property_links(county: str, parcel: str) -> list[tuple[str, str]]:
+    """Property Appraiser links for a parcel (Miami-Dade: property search; Broward: record + map)."""
+    parcel = parcel or ""
+    if not parcel or parcel.upper().startswith("MULTIPLE"):
+        return []
+    digits = re.sub(r"\D", "", parcel)
+    if county == "miamidade" and len(digits) == 13:
+        return [("Property", f"https://apps.miamidadepa.gov/propertysearch/#/?folio={digits}")]
+    if county == "broward" and digits:
+        return [("Property", f"https://bcpa.net/RecInfo.asp?URL_Folio={digits}"),
+                ("Map", f"https://gisweb-adapters.bcpa.net/bcpawebmap_ex/bcpawebmap.aspx?FOLIO={digits}")]
+    return []
+
+
+# Chart colors (validated reference palette, light mode): fixed slots, never cycled.
+C_BLUE, C_ORANGE, C_AQUA = "#2a78d6", "#eb6834", "#1baf7a"
+C_GRAY, C_GRAY_DARK = "#c3c2b7", "#8a8983"
+C_SURFACE, C_TEXT, C_TEXT2, C_GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e7e6e1"
+
+
+def weekly_data(today: date) -> dict:
     rows = list(load_results().values())
     for r in rows:
         r["_d"] = datetime.strptime(r["sale_date"], DATE_FORMAT).date()
         r["_amt"], r["_bid"] = _f(r.get("sold_amount")), _f(r.get("opening_bid"))
         r["_x"], r["_xe"] = _f(r.get("x_opening")), _f(r.get("x_est_value"))
+        r["_sq"] = _f(r.get("lot_sqft"))
         r["_g"] = _group(r.get("land_use"))
         r["_3p"] = "3RD PARTY" in (r.get("sold_to") or "").upper()
+        r["_sold"] = r["status"] == "Sold"
+        r["_links"] = property_links(r["county"], r.get("parcel"))
     start = today - timedelta(days=7)
-    week = [r for r in rows if start <= r["_d"] < today]
-    L = [f"📈 Weekly auction report · {start:%b %d} – {today - timedelta(days=1):%b %d}"]
+    d = {"today": today, "start": start, "end": today - timedelta(days=1), "rows": rows,
+         "week": [r for r in rows if start <= r["_d"] < today]}
+    d["third_all"] = [r for r in rows if r["_sold"] and r["_3p"] and r["_x"]]
 
-    if not rows:
-        L += ["", "No results saved yet. Check that the auction-results Action is running "
-                  "(Actions tab) and that results.csv is being committed."]
-        return "\n".join(L)
-
-    # --- this week
-    L.append("")
-    if not week:
-        L.append("No sales this week.")
-    for county in sorted({r["county"] for r in week}):
-        c = [r for r in week if r["county"] == county]
-        sold = [r for r in c if r["status"] == "Sold"]
-        third = [r for r in sold if r["_3p"]]
+    # per county, this week
+    d["counties"] = []
+    for county in sorted({r["county"] for r in d["week"]}):
+        c = [r for r in d["week"] if r["county"] == county]
+        sold = [r for r in c if r["_sold"]]
+        third = [r["_x"] for r in sold if r["_3p"] and r["_x"]]
         red = sum(1 for r in c if r["status"].upper().startswith("REDEEM"))
-        days = len({r["_d"] for r in c})
-        line = (f"{COUNTY_NAME.get(county, county.title()).upper()}: {len(c)} listings over {days} sale day(s), {len(sold)} sold "
-                f"({len(third)} to outside bidders), {red} redeemed ({red / len(c):.0%})")
-        L.append(line)
-        xs = [r["_x"] for r in third if r["_x"]]
-        if xs:
-            L.append(f"  Outside bidders paid a median {_median(xs):.1f}x the opening bid "
-                     f"(range {min(xs):.1f}x–{max(xs):.1f}x)")
+        d["counties"].append({"name": COUNTY_NAME.get(county, county.title()), "n": len(c),
+                              "days": len({r["_d"] for r in c}), "sold": len(sold),
+                              "third": sum(1 for r in sold if r["_3p"]), "redeemed": red,
+                              "median_x": _median(third)})
+    w = d["week"]
+    xs_w = [r["_x"] for r in w if r["_sold"] and r["_3p"] and r["_x"]]
+    d["kpi"] = {"listings": len(w), "sold": sum(1 for r in w if r["_sold"]),
+                "third": sum(1 for r in w if r["_sold"] and r["_3p"]),
+                "median_x": _median(xs_w),
+                "redeemed_pct": (sum(1 for r in w if r["status"].upper().startswith("REDEEM")) / len(w)) if w else None,
+                "volume": sum(r["_amt"] or 0 for r in w if r["_sold"])}
+    d["sold_week"] = sorted([r for r in w if r["_sold"]], key=lambda r: -(r["_amt"] or 0))
 
-    # --- notable sales this week
-    third_wk = sorted([r for r in week if r["status"] == "Sold" and r["_3p"] and r["_amt"]],
-                      key=lambda r: -r["_amt"])
-    lots_wk = [r for r in week if r["status"] == "Sold" and r["_g"] == "Vacant residential"]
-    if third_wk:
-        L += ["", "Top sales:"]
-        for r in third_wk[:5]:
-            lot = f", {int(_f(r['lot_sqft'])):,} sq ft" if _f(r.get("lot_sqft")) else ""
-            L.append(f"  ${r['_amt']:,.0f} · {r['address'] or 'no address'}, {_city(r)} · {r['_g']}{lot}"
-                     + (f" · {r['_x']:.1f}x opening" if r["_x"] else ""))
-    if lots_wk:
-        L += ["", "Vacant residential lots sold:"]
-        for r in sorted(lots_wk, key=lambda r: -(r["_amt"] or 0))[:8]:
-            sq = _f(r.get("lot_sqft"))
-            ppsf = f", ${r['_amt'] / sq:,.2f}/sq ft" if r["_amt"] and sq else ""
-            vs = f", {r['_xe']:.0%} of comps value" if r["_xe"] else ""
-            who = "outside bidder" if r["_3p"] else "cert holder (no competition)"
-            L.append(f"  {r['address'] or 'no address'}, {_city(r)}: opened ${r['_bid'] or 0:,.0f} → "
-                     f"${r['_amt'] or 0:,.0f}{ppsf}{vs} · {who}")
-    cheap_wk = [r for r in week if r["status"] == "Sold" and r["_g"] not in ("Condo", "Vacant residential")
-                and r["_amt"] and r["_amt"] <= PROPERTY_MAX_BID]
-    if cheap_wk:
-        L += ["", f"Non-condo properties sold under ${PROPERTY_MAX_BID:,.0f}:"]
-        for r in sorted(cheap_wk, key=lambda r: r["_amt"])[:8]:
-            val = _f(r.get("pa_total_val"))
-            v = f" (PA value ${val:,.0f}, {r['_amt'] / val:.0%})" if val else ""
-            L.append(f"  ${r['_amt']:,.0f} · {r['address'] or 'no address'}, {_city(r)} · {r['_g']}{v}")
-
-    # --- all data so far: bidding guide
-    first = min(r["_d"] for r in rows)
-    third_all = [r for r in rows if r["status"] == "Sold" and r["_3p"] and r["_x"]]
-    L += ["", f"Bidding guide (all {len(rows)} results since {first:%b %d}):"]
-    if len(third_all) < 5:
-        L.append(f"  Only {len(third_all)} outside-bidder sale(s) so far; numbers get useful after ~20.")
-    for g in ("Vacant residential", "Single family", "Multi-family", "Other vacant", "Other"):
-        xs = [r["_x"] for r in third_all if r["_g"] == g]
-        if len(xs) >= 3:
-            L.append(f"  {g}: median {_median(xs):.1f}x opening, 75% sold at or below {_pct(xs, .75):.1f}x (n={len(xs)})")
-    lot_ppsf = [r["_amt"] / _f(r["lot_sqft"]) for r in rows
-                if r["status"] == "Sold" and r["_3p"] and r["_g"] == "Vacant residential"
-                and r["_amt"] and _f(r.get("lot_sqft"))]
-    if len(lot_ppsf) >= 3:
-        L.append(f"  Vacant lots: median ${_median(lot_ppsf):,.2f}/sq ft paid at auction (n={len(lot_ppsf)})")
-    xe = [r["_xe"] for r in third_all if r["_xe"] and r["_g"] == "Vacant residential"]
-    if len(xe) >= 3:
-        L.append(f"  Vacant lots sell for a median {_median(xe):.0%} of the comps value")
+    # bidding guide (all data)
+    guide = []
+    for g in ("Vacant residential", "Single family", "Multi-family", "Mobile home", "Other vacant", "Other"):
+        xs = [r["_x"] for r in d["third_all"] if r["_g"] == g]
+        if not xs:
+            continue
+        ppsf = [r["_amt"] / r["_sq"] for r in d["third_all"] if r["_g"] == g and r["_amt"] and r["_sq"]]
+        guide.append({"type": g, "n": len(xs), "median": _median(xs), "p75": _pct(xs, .75),
+                      "ppsf": _median(ppsf) if g == "Vacant residential" and ppsf else None})
+    d["guide"] = guide
+    d["guide_by_type"] = {g["type"]: g for g in guide if g["n"] >= 3}
+    xe = [r["_xe"] for r in d["third_all"] if r["_xe"] and r["_g"] == "Vacant residential"]
+    d["lot_vs_comps"] = (_median(xe), len(xe)) if len(xe) >= 3 else None
     by_city: dict[str, list[float]] = {}
-    for r in third_all:
+    for r in d["third_all"]:
         by_city.setdefault(_city(r), []).append(r["_x"])
-    hot = sorted(((c, _median(v), len(v)) for c, v in by_city.items() if len(v) >= 3), key=lambda t: -t[1])
-    if hot:
-        L.append("  Most competitive cities: " + ", ".join(f"{c} {m:.1f}x (n={n})" for c, m, n in hot[:4]))
+    d["cities"] = sorted(((c, _median(v), len(v)) for c, v in by_city.items() if len(v) >= 3),
+                         key=lambda t: -t[1])[:5]
+    d["county_rates"] = []
     for county in sorted({r["county"] for r in rows}):
         c = [r for r in rows if r["county"] == county]
-        red = sum(1 for r in c if r["status"].upper().startswith("REDEEM"))
-        no_comp = sum(1 for r in c if r["status"] == "Sold" and not r["_3p"])
-        L.append(f"  {COUNTY_NAME.get(county, county.title())}: {red / len(c):.0%} of listings are redeemed before the sale, "
-                 f"{no_comp / len(c):.0%} go to the cert holder with no bids")
+        d["county_rates"].append({
+            "name": COUNTY_NAME.get(county, county.title()), "n": len(c),
+            "redeemed": sum(1 for r in c if r["status"].upper().startswith("REDEEM")) / len(c),
+            "cert": sum(1 for r in c if r["_sold"] and not r["_3p"]) / len(c),
+            "third": sum(1 for r in c if r["_sold"] and r["_3p"]) / len(c)})
 
-    # --- next week: your matches
-    seen = load_seen()
-    nxt = []
-    for k, v in seen.items():
+    # your matches in the next 7 days
+    up = []
+    for k, v in load_seen().items():
         if k.startswith("_") or not v.get("ok"):
             continue
-        d = days_until(v.get("sale_date", ""), today)
-        if d is not None and 0 <= d <= 7:
-            nxt.append((d, k, v))
-    L += ["", f"Your matches coming up in the next 7 days: {len(nxt)}"]
-    for d, k, v in sorted(nxt, key=lambda t: t[0])[:10]:
-        cat = "🌱" if v.get("cat") == "lot" else "🏠"
-        desc = ((v.get("land_use") or {}).get("desc") or "").title()
-        bid = f"opening ${v['bid']:,.0f}" if v.get("bid") else ""
-        where = ", ".join(x for x in (v.get("address"), (v.get("city") or "").split(",")[0].title()) if x)
-        L.append(f"  {cat} {v['sale_date'][:5]} {COUNTY_NAME.get(k.split(':')[0], k.split(':')[0]).upper()} · {where or v.get('parcel') or '#' + k.split(':')[-1]}"
-                 + (f" · {desc}" if desc else "") + (f" · {bid}" if bid else ""))
-        # what similar things sold for
-        g = _group((v.get("land_use") or {}).get("desc"))
-        xs = [r["_x"] for r in third_all if r["_g"] == g]
-        if v.get("bid") and len(xs) >= 3:
-            L.append(f"     similar {g.lower()} sales suggest ≈ ${v['bid'] * _median(xs):,.0f} "
-                     f"(up to ${v['bid'] * _pct(xs, .75):,.0f})")
+        dd = days_until(v.get("sale_date", ""), today)
+        if dd is None or not 0 <= dd <= 7:
+            continue
+        county = k.split(":")[0]
+        desc = (v.get("land_use") or {}).get("desc") or ""
+        g = d["guide_by_type"].get(_group(desc))
+        bid = v.get("bid")
+        up.append({"days": dd, "date": v["sale_date"], "county": COUNTY_NAME.get(county, county),
+                   "cat": v.get("cat"), "where": ", ".join(x for x in (v.get("address"), (v.get("city") or "").split(",")[0].title()) if x)
+                   or v.get("parcel") or "", "type": desc.title(), "bid": bid,
+                   "est": (bid * g["median"], bid * g["p75"]) if bid and g else None,
+                   "links": ([("Listing", v["link"])] if v.get("link") else []) + property_links(county, v.get("parcel"))})
+    d["upcoming"] = sorted(up, key=lambda u: u["days"])
+    return d
+
+
+def weekly_charts(d: dict) -> dict[str, bytes]:
+    """PNG charts (matplotlib). Returns {} if matplotlib isn't installed or there's no data."""
+    try:
+        import io
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import FuncFormatter
+    except ImportError:
+        print("[weekly] matplotlib not installed; sending the report without charts", file=sys.stderr)
+        return {}
+
+    def style(ax, title):
+        ax.set_facecolor(C_SURFACE)
+        for s in ("top", "right", "left"):
+            ax.spines[s].set_visible(False)
+        ax.spines["bottom"].set_color(C_GRID)
+        ax.tick_params(colors=C_TEXT2, labelsize=9, length=0)
+        ax.set_title(title, loc="left", fontsize=12, color=C_TEXT, fontweight="bold", pad=24)
+
+    def png(fig):
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=160, facecolor=C_SURFACE, bbox_inches="tight")
+        plt.close(fig)
+        return buf.getvalue()
+
+    money_fmt = FuncFormatter(lambda v, _: f"${v / 1000:,.0f}K" if v >= 1000 else f"${v:,.0f}")
+    out = {}
+    rows = d["rows"]
+
+    # 1) outcome of every sale day (stacked bars)
+    days = sorted({(r["_d"], r["county"]) for r in rows})[-12:]
+    if days:
+        cats = [("Sold to outside bidder", C_BLUE, lambda r: r["_sold"] and r["_3p"]),
+                ("Sold to cert holder", C_ORANGE, lambda r: r["_sold"] and not r["_3p"]),
+                ("Redeemed", C_GRAY, lambda r: r["status"].upper().startswith("REDEEM")),
+                ("Canceled / other", C_GRAY_DARK, lambda r: not r["_sold"] and not r["status"].upper().startswith("REDEEM"))]
+        fig, ax = plt.subplots(figsize=(7.2, 3.4))
+        labels = [f"{dt:%m/%d}\n{'BRW' if c == 'broward' else 'MDC'}" for dt, c in days]
+        bottom = [0] * len(days)
+        for name, color, f in cats:
+            vals = [sum(1 for r in rows if (r["_d"], r["county"]) == k and f(r)) for k in days]
+            ax.bar(labels, vals, bottom=bottom, color=color, label=name, width=0.6,
+                   edgecolor=C_SURFACE, linewidth=2)
+            bottom = [b + v for b, v in zip(bottom, vals)]
+        for x, t in enumerate(bottom):
+            ax.text(x, t + max(bottom) * 0.02, str(t), ha="center", va="bottom", fontsize=8, color=C_TEXT2)
+        ax.set_ylim(0, max(bottom) * 1.12)
+        ax.yaxis.grid(True, color=C_GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        ax.set_ylabel("Listings", color=C_TEXT2, fontsize=9)
+        ax.legend(ncol=4, fontsize=8, frameon=False, loc="lower left", bbox_to_anchor=(0, 1.02),
+                  labelcolor=C_TEXT2, handlelength=1, columnspacing=1.2, borderaxespad=0)
+        style(ax, "What happened on each sale day")
+        out["outcomes"] = png(fig)
+
+    # 2) opening bid vs price paid (outside bidders), log-log
+    pts = [r for r in d["third_all"] if r["_bid"] and r["_amt"]]
+    if pts:
+        groups = [("Vacant residential", C_BLUE), ("Single family", C_ORANGE), ("Other", C_AQUA)]
+        gof = lambda r: r["_g"] if r["_g"] in ("Vacant residential", "Single family") else "Other"
+        fig, ax = plt.subplots(figsize=(7.2, 4.0))
+        xlo, xhi = min(r["_bid"] for r in pts) * 0.7, max(r["_bid"] for r in pts) * 1.4
+        ylo = min(min(r["_amt"] for r in pts), min(r["_bid"] for r in pts)) * 0.7
+        yhi = max(r["_amt"] for r in pts) * 1.4
+        for m in (1, 2, 5, 10):
+            x0, x1 = max(xlo, ylo / m), min(xhi, yhi / m)
+            if x0 >= x1:
+                continue
+            ax.plot([x0, x1], [x0 * m, x1 * m], color="#cfcec8", linewidth=1, linestyle="--", zorder=1)
+            ax.text(x1, x1 * m, f" {m}×", color=C_TEXT2, fontsize=8,
+                    va="bottom" if x1 < xhi else "center", ha="right" if x1 < xhi else "left")
+        for name, color in groups:
+            g = [r for r in pts if gof(r) == name]
+            if g:
+                ax.scatter([r["_bid"] for r in g], [r["_amt"] for r in g], s=55, color=color,
+                           edgecolors=C_SURFACE, linewidths=1.5, label=f"{name} ({len(g)})", zorder=3)
+        ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_xlim(xlo, xhi); ax.set_ylim(ylo, yhi)
+        ax.tick_params(which="minor", length=0)
+        ax.minorticks_off()
+        ax.xaxis.set_major_formatter(money_fmt); ax.yaxis.set_major_formatter(money_fmt)
+        ax.set_xlabel("Opening bid", color=C_TEXT2, fontsize=9)
+        ax.set_ylabel("Price paid", color=C_TEXT2, fontsize=9)
+        ax.grid(True, color=C_GRID, linewidth=0.6, which="major")
+        ax.set_axisbelow(True)
+        ax.legend(ncol=3, fontsize=8, frameon=False, loc="lower left", bbox_to_anchor=(0, 1.02),
+                  labelcolor=C_TEXT2, handletextpad=0.3, borderaxespad=0)
+        style(ax, "Outside-bidder sales: opening bid vs. price paid (all data)")
+        out["scatter"] = png(fig)
+
+    # 3) median multiple by property type
+    guide = [g for g in d["guide"] if g["n"] >= 2]
+    if guide:
+        fig, ax = plt.subplots(figsize=(7.2, 0.55 * len(guide) + 1.1))
+        names = [f"{g['type']}  (n={g['n']})" for g in guide][::-1]
+        vals = [g["median"] for g in guide][::-1]
+        ax.barh(names, vals, color=C_BLUE, height=0.55, edgecolor=C_SURFACE, linewidth=2)
+        for y, v in enumerate(vals):
+            ax.text(v + max(vals) * 0.015, y, f"{v:.1f}×", va="center", fontsize=9, color=C_TEXT)
+        ax.axvline(1, color=C_TEXT2, linewidth=1, linestyle="--")
+        ax.xaxis.grid(True, color=C_GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        ax.set_xlim(0, max(vals) * 1.15)
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0f}×"))
+        style(ax, "Typical price paid, as a multiple of the opening bid")
+        ax.text(0, 1.04, "Median of outside-bidder sales · dashed line = opening bid", transform=ax.transAxes,
+                fontsize=8, color=C_TEXT2)
+        out["multiples"] = png(fig)
+    return out
+
+
+def _m(v) -> str:
+    return "—" if v is None else f"${v:,.0f}"
+
+
+def weekly_html(d: dict, chart_src: dict[str, str]) -> str:
+    """Email-safe HTML report. chart_src maps chart name -> img src (cid:... or data:...)."""
+    e = lambda s: html.escape(str(s))
+    td = 'style="padding:7px 8px;border-bottom:1px solid #ecebe6;font-size:13px;vertical-align:top"'
+    tdr = 'style="padding:7px 8px;border-bottom:1px solid #ecebe6;font-size:13px;text-align:right;white-space:nowrap;vertical-align:top"'
+    th = 'style="padding:7px 8px;border-bottom:2px solid #d6d5cf;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#52514e;text-align:left"'
+    thr = th.replace("text-align:left", "text-align:right")
+    h2 = 'style="font-size:17px;margin:30px 0 4px;color:#0b0b0b"'
+    sub = 'style="font-size:13px;color:#52514e;margin:0 0 12px"'
+    links = lambda ls: " · ".join(f'<a href="{e(u)}" style="color:#2a78d6;text-decoration:none">{e(n)}</a>' for n, u in ls)
+    img = lambda k: (f'<img src="{chart_src[k]}" width="680" style="width:100%;max-width:680px;height:auto;display:block;margin:8px 0 4px" alt="">'
+                     if k in chart_src else "")
+    k = d["kpi"]
+    P = []
+    P.append(f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Auction report {d["today"]:%m/%d/%Y}</title><meta name="color-scheme" content="light"></head>
+<body style="margin:0;background:#f1f0ec;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0b0b0b">
+<div style="max-width:760px;margin:0 auto;padding:16px">
+<div style="background:#fcfcfb;border-radius:12px;padding:24px 22px">
+<div style="font-size:12px;color:#52514e;text-transform:uppercase;letter-spacing:.06em">Tax deed auctions · Miami-Dade &amp; Broward</div>
+<h1 style="font-size:24px;margin:4px 0 2px">Weekly report</h1>
+<div style="font-size:14px;color:#52514e">{d["start"]:%b %d} – {d["end"]:%b %d, %Y}</div>''')
+
+    if not d["rows"]:
+        P.append('<p style="margin-top:24px">No results saved yet. Check that the <b>auction-results</b> Action is '
+                 'running and committing <code>results.csv</code>.</p></div></div></body></html>')
+        return "".join(P)
+
+    # KPI tiles
+    tiles = [("Listings", f'{k["listings"]}'), ("Sold", f'{k["sold"]}'),
+             ("To outside bidders", f'{k["third"]}'),
+             ("Median × opening", f'{k["median_x"]:.1f}×' if k["median_x"] else "—"),
+             ("Redeemed", f'{k["redeemed_pct"]:.0%}' if k["redeemed_pct"] is not None else "—")]
+    P.append('<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:18px;border-collapse:separate;border-spacing:6px 0"><tr>')
+    for label, val in tiles:
+        P.append(f'<td style="background:#f4f3ef;border-radius:8px;padding:10px 10px;width:20%;vertical-align:top">'
+                 f'<div style="font-size:11px;color:#52514e">{e(label)}</div>'
+                 f'<div style="font-size:18px;font-weight:700;margin-top:2px">{e(val)}</div></td>')
+    P.append("</tr></table>")
+    if not d["week"]:
+        P.append('<p style="font-size:14px;color:#52514e;margin:14px 0 0">No tax deed sales this week. '
+                 'The guide below uses all data saved so far.</p>')
+    for c in d["counties"]:
+        mx = f', outside bidders paid a median <b>{c["median_x"]:.1f}×</b> the opening bid' if c["median_x"] else ""
+        P.append(f'<p style="font-size:14px;margin:12px 0 0"><b>{e(c["name"])}</b>: {c["n"]} listings on {c["days"]} sale day(s) · '
+                 f'{c["sold"]} sold ({c["third"]} to outside bidders) · {c["redeemed"]} redeemed{mx}.</p>')
+
+    # this week's sales
+    if d["sold_week"]:
+        P.append(f'<h2 {h2}>What sold this week</h2><p {sub}>Sorted by price. Open the Property link to see what was sold.</p>')
+        P.append('<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">')
+        P.append(f'<tr><th {th}>Date</th><th {th}>Property</th><th {thr}>Opening</th><th {thr}>Paid</th></tr>')
+        for r in d["sold_week"]:
+            lot = f" · {int(r['_sq']):,} sq ft" if r["_sq"] else ""
+            pa = _f(r.get("pa_total_val"))
+            pav = f" · PA value {_m(pa)}" if pa else ""
+            ls = r["_links"] + ([("Listing", r["listing"])] if r.get("listing") else [])
+            buyer = "outside bidder" if r["_3p"] else "cert holder"
+            mult = f"{r['_x']:.1f}× · " if r["_x"] else ""
+            P.append(f'<tr><td {td}>{r["_d"]:%m/%d}<br><span style="color:#52514e;font-size:11px">{e(COUNTY_NAME.get(r["county"], r["county"]))}</span></td>'
+                     f'<td {td}><b>{e(r["address"] or "No address")}</b>, {e(_city(r))}<br>'
+                     f'<span style="color:#52514e;font-size:12px">{e(r["_g"])}{lot}{pav}</span><br>'
+                     f'<span style="font-size:12px">{links(ls)}</span></td>'
+                     f'<td {tdr}>{_m(r["_bid"])}</td><td {td.replace("vertical-align:top", "vertical-align:top;text-align:right")}><b style="white-space:nowrap">{_m(r["_amt"])}</b><br>'
+                     f'<span style="color:#52514e;font-size:11px">{mult}{buyer}</span></td></tr>')
+        P.append("</table>")
+
+    # charts
+    if chart_src:
+        P.append(f'<h2 {h2}>Charts</h2>')
+        P.append(img("outcomes"))
+        P.append(img("scatter"))
+        P.append(img("multiples"))
+
+    # bidding guide
+    P.append(f'<h2 {h2}>Bidding guide</h2><p {sub}>All {len(d["rows"])} results saved since '
+             f'{min(r["_d"] for r in d["rows"]):%b %d}. Based on sales to outside bidders, where there was real competition.</p>')
+    if len(d["third_all"]) < 5:
+        P.append(f'<p style="font-size:13px;color:#52514e">Only {len(d["third_all"])} outside-bidder sale(s) so far. '
+                 'These numbers become reliable after about 20.</p>')
+    if d["guide"]:
+        P.append('<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">')
+        P.append(f'<tr><th {th}>Property type</th><th {thr}>Sales</th><th {thr}>Median ×</th>'
+                 f'<th {thr}>75% sold ≤</th><th {thr}>$/sq ft</th></tr>')
+        for g in d["guide"]:
+            ppsf = f"${g['ppsf']:,.2f}" if g["ppsf"] else "—"
+            P.append(f'<tr><td {td}>{e(g["type"])}</td><td {tdr}>{g["n"]}</td><td {tdr}><b>{g["median"]:.1f}×</b></td>'
+                     f'<td {tdr}>{g["p75"]:.1f}×</td><td {tdr}>{ppsf}</td></tr>')
+        P.append("</table>")
+    notes = []
+    if d["lot_vs_comps"]:
+        notes.append(f'Vacant lots sell for a median <b>{d["lot_vs_comps"][0]:.0%}</b> of their comps value (n={d["lot_vs_comps"][1]}).')
+    if d["cities"]:
+        notes.append("Most competitive cities: " + ", ".join(f'{e(c)} <b>{m:.1f}×</b> (n={n})' for c, m, n in d["cities"]) + ".")
+    for c in d["county_rates"]:
+        notes.append(f'{e(c["name"])}: {c["redeemed"]:.0%} redeemed before the sale, {c["cert"]:.0%} went to the cert holder '
+                     f'with no bids, {c["third"]:.0%} sold to outside bidders (n={c["n"]}).')
+    if notes:
+        P.append('<ul style="font-size:13px;padding-left:18px;margin:12px 0 0">' + "".join(f"<li style='margin:4px 0'>{n}</li>" for n in notes) + "</ul>")
+
+    # upcoming
+    P.append(f'<h2 {h2}>Your matches in the next 7 days</h2>')
+    if not d["upcoming"]:
+        P.append(f'<p {sub}>None of your matches go to sale in the next 7 days.</p>')
+    else:
+        P.append(f'<p {sub}>Likely price = opening bid × what similar properties have gone for (median – 75th percentile).</p>')
+        P.append('<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">')
+        P.append(f'<tr><th {th}>Sale</th><th {th}>Property</th><th {thr}>Opening</th><th {thr}>Likely price</th></tr>')
+        for u in d["upcoming"]:
+            icon = "🌱" if u["cat"] == "lot" else "🏠"
+            est = f'{_m(u["est"][0])} – {_m(u["est"][1])}' if u["est"] else '<span style="color:#52514e">not enough data</span>'
+            P.append(f'<tr><td {td}>{e(u["date"][:5])}<br><span style="color:#52514e;font-size:11px">{e(u["county"])}</span></td>'
+                     f'<td {td}>{icon} <b>{e(u["where"])}</b><br><span style="color:#52514e;font-size:12px">{e(u["type"])}</span><br>'
+                     f'<span style="font-size:12px">{links(u["links"])}</span></td>'
+                     f'<td {tdr}>{_m(u["bid"])}</td><td {tdr}>{est}</td></tr>')
+        P.append("</table>")
+    P.append('<p style="font-size:11px;color:#8a8983;margin-top:26px">Generated by auction-watcher from the public auction '
+             'calendars. For your own bidding decisions only.</p></div></div></body></html>')
+    return "".join(P)
+
+
+def weekly_telegram(d: dict) -> str:
+    """Short Telegram summary (HTML parse mode); the full report goes as an attached file."""
+    e = html.escape
+    k = d["kpi"]
+    L = [f"<b>📈 Weekly auction report</b>", f"<i>{d['start']:%b %d} – {d['end']:%b %d}</i>", ""]
+    if not d["rows"]:
+        L.append("No results saved yet. Check that the auction-results Action is running.")
+        return "\n".join(L)
+    if d["week"]:
+        mx = f" · median <b>{k['median_x']:.1f}×</b> opening" if k["median_x"] else ""
+        L.append(f"<b>{k['listings']}</b> listings · <b>{k['sold']}</b> sold ({k['third']} to outside bidders) · "
+                 f"{k['redeemed_pct']:.0%} redeemed{mx}")
+    else:
+        L.append("No tax deed sales this week.")
+    if d["sold_week"]:
+        L += ["", "<b>Top sales</b>"]
+        short = {"Vacant residential": "Lot", "Single family": "House", "Multi-family": "Multi",
+                 "Mobile home": "Mobile", "Other vacant": "Lot*", "Condo": "Condo"}
+        rows = [(_city(r)[:12], short.get(r["_g"], "Other"), _m(r["_amt"]),
+                 f"{r['_x']:.1f}x" if r["_x"] else "cert") for r in d["sold_week"][:6]]
+        table = [("City", "Type", "Paid", "x open")] + rows
+        w = [max(len(r[i]) for r in table) for i in range(4)]
+        fmt = lambda r: f"{r[0]:<{w[0]}} {r[1]:<{w[1]}} {r[2]:>{w[2]}} {r[3]:>{w[3]}}"
+        L.append("<pre>" + e("\n".join(fmt(r) for r in table)) + "</pre>")
+    if d["upcoming"]:
+        L += ["", f"<b>Next 7 days: {len(d['upcoming'])} of your matches</b>"]
+        for u in d["upcoming"][:5]:
+            icon = "🌱" if u["cat"] == "lot" else "🏠"
+            est = f" → likely {_m(u['est'][0])}–{_m(u['est'][1])}" if u["est"] else ""
+            L.append(f"{icon} {e(u['date'][:5])} {e(u['where'])} · opens {_m(u['bid'])}{est}")
+    L += ["", "Full report with tables, charts and Property Appraiser links attached ⬇️"]
     return "\n".join(L)
 
 
 def send_weekly(today: date, dry_run: bool) -> None:
-    text = weekly_report(today)
+    import base64
+    d = weekly_data(today)
+    charts = weekly_charts(d) if d["rows"] else {}
+    file_html = weekly_html(d, {k: "data:image/png;base64," + base64.b64encode(v).decode() for k, v in charts.items()})
+    name = f"auction-report-{today:%Y-%m-%d}.html"
     if dry_run or not (TELEGRAM_TOKEN or SMTP_USER):
-        print(text)
+        Path(name).write_text(file_html, encoding="utf-8")
+        for k, v in charts.items():
+            Path(f"chart-{k}.png").write_bytes(v)
+        print(weekly_telegram(d))
+        print(f"\n[weekly] wrote {name} and {len(charts)} chart(s)")
         return
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        send_telegram(text)
+        tg("sendMessage", chat_id=TELEGRAM_CHAT_ID, text=weekly_telegram(d), parse_mode="HTML",
+           disable_web_page_preview=True)
+        if charts:
+            media = [{"type": "photo", "media": f"attach://{k}"} for k in charts]
+            r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup",
+                              data={"chat_id": TELEGRAM_CHAT_ID, "media": json.dumps(media)},
+                              files={k: (f"{k}.png", v, "image/png") for k, v in charts.items()}, timeout=60)
+            if not r.json().get("ok"):
+                print(f"[warn] Telegram charts: {r.text[:200]}", file=sys.stderr)
+        r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument",
+                          data={"chat_id": TELEGRAM_CHAT_ID, "caption": "Full weekly report (open in your browser)"},
+                          files={"document": (name, file_html.encode("utf-8"), "text/html")}, timeout=60)
+        if not r.json().get("ok"):
+            print(f"[warn] Telegram report file: {r.text[:200]}", file=sys.stderr)
     if SMTP_USER and SMTP_PASS:
-        send_email(f"📈 Weekly auction report {today:%m/%d}", text)
+        msg = EmailMessage()
+        msg["Subject"] = f"📈 Weekly auction report · {d['start']:%b %d} – {d['end']:%b %d}"
+        msg["From"], msg["To"] = SMTP_USER, EMAIL_TO
+        msg.set_content(re.sub(r"<[^>]+>", "", weekly_telegram(d)))
+        msg.add_alternative(weekly_html(d, {k: f"cid:{k}" for k in charts}), subtype="html")
+        body = msg.get_payload()[1]
+        for k, v in charts.items():
+            body.add_related(v, "image", "png", cid=f"<{k}>")
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(SMTP_USER, SMTP_PASS)
+            smtp.send_message(msg)
 
 
 # ----------------------------------------------------------------------------
@@ -1029,14 +1320,7 @@ def links_of(item: dict) -> list[tuple[str, str]]:
         out.append(("Listing", item["link"]))
     if item.get("day_link"):
         out.append(("Sale day", item["day_link"]))
-    if item.get("county", "miamidade") == "miamidade":
-        if folio := folio_of(item):
-            out.append(("Property", f"https://apps.miamidadepa.gov/propertysearch/#/?folio={folio}"))
-    elif item.get("county") == "broward" and item["parcel"] and not item["parcel"].upper().startswith("MULTIPLE"):
-        folio = re.sub(r"\D", "", item["parcel"])  # 514119-06-0741 -> 514119060741
-        if folio:
-            out.append(("Property", f"https://bcpa.net/RecInfo.asp?URL_Folio={folio}"))
-            out.append(("Map", f"https://gisweb-adapters.bcpa.net/bcpawebmap_ex/bcpawebmap.aspx?FOLIO={folio}"))
+    out.extend(property_links(item.get("county", "miamidade"), item.get("parcel")))
     return out
 
 
