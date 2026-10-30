@@ -78,6 +78,8 @@ SEEN_FILE = Path(os.getenv("SEEN_FILE", "seen.json"))
 RESULTS_FILE = Path(os.getenv("RESULTS_FILE", "results.csv"))
 # Send a short Telegram/email summary of the day's results (sold items) after collecting them
 RESULTS_NOTIFY = os.getenv("RESULTS_NOTIFY", "1") not in ("0", "", "false", "no")
+# Each results run re-checks sale days this far back, so a missed run is caught up.
+RESULTS_DAYS_BACK = int(os.getenv("RESULTS_DAYS_BACK", "7"))
 # Reminder alerts: days before the sale (default: a week before and a day before).
 REMIND_DAYS = sorted({int(d) for d in os.getenv("REMIND_DAYS", "7,1").split(",") if d.strip()}, reverse=True)
 
@@ -253,12 +255,12 @@ def auction_days(s: requests.Session, base: str) -> list[str]:
         for y, m in sorted(months):
             r = s.get(base + CALENDAR_PATH + CALENDAR_MONTH_PARAM.format(m=m, y=y), timeout=30)
             r.raise_for_status()
-            shown = {(int(y2), int(m2)) for m2, _, y2 in re.findall(r'dayid="(\d{2})/(\d{2})/(\d{4})"', r.text)}
+            shown = {(int(y2), int(m2)) for m2, _, y2 in re.findall(r'dayid=["\'](\d{2})/(\d{2})/(\d{4})["\']', r.text)}
             if shown and (y, m) not in shown:
                 print(f"[warn] {county_of(base)}: asked the calendar for {m}/{y} but it showed "
                       f"{sorted(shown)}; the month parameter isn't right yet", file=sys.stderr)
             # each day: <div class="CALBOX ..." dayid="09/01/2026"> ... Foreclosure ... CALSCH">4</span> FC ...</div>
-            for ds, box in re.findall(r'dayid="(\d{2}/\d{2}/\d{4})"(.*?)</div>', r.text, re.I | re.S):
+            for ds, box in re.findall(r'dayid=["\'](\d{2}/\d{2}/\d{4})["\'](.*?)</div>', r.text, re.I | re.S):
                 try:
                     dd = datetime.strptime(ds, "%m/%d/%Y").date()
                 except ValueError:
@@ -272,9 +274,11 @@ def auction_days(s: requests.Session, base: str) -> list[str]:
     if found:
         print(f"[fetch] {county_of(base)}: calendar has {len(found)} auction day(s) in range")
         return [d.strftime(DATE_FORMAT) for d in sorted(found)]
-    print(f"[warn] {county_of(base)}: couldn't read auction days from the calendar; checking every weekday",
-          file=sys.stderr)
-    return [d.strftime(DATE_FORMAT) for d in sale_dates(DAYS_AHEAD)]
+    # Don't guess: opening a day with no sale makes the site show another day's list,
+    # which would put the wrong sale date on listings.
+    print(f"[warn] {county_of(base)}: no tax deed sale days found on the calendar in the next "
+          f"{DAYS_AHEAD} days", file=sys.stderr)
+    return []
 
 
 def fetch_site(site: str) -> list[dict]:
@@ -603,26 +607,43 @@ def parse_status(a: dict) -> dict | None:
             "sold_time": B}
 
 
-def auction_today(s: requests.Session, base: str, day: date) -> bool:
-    """True if the calendar shows a sale of a watched type on this day."""
-    r = s.get(base + CALENDAR_PATH + CALENDAR_MONTH_PARAM.format(m=day.month, y=day.year), timeout=30)
-    r.raise_for_status()
-    ds = day.strftime("%m/%d/%Y")
-    for d, box in re.findall(r'dayid="(\d{2}/\d{2}/\d{4})"(.*?)</div>', r.text, re.I | re.S):
-        if d == ds:
-            return calendar_day_wanted(box)
-    return False
+def sale_days_between(s: requests.Session, base: str, start: date, end: date) -> list[date]:
+    """Days between start and end (inclusive) that the calendar shows a watched sale on."""
+    months, d = set(), start.replace(day=1)
+    while d <= end:
+        months.add((d.year, d.month))
+        d = (d + timedelta(days=32)).replace(day=1)
+    days = set()
+    for y, m in sorted(months):
+        r = s.get(base + CALENDAR_PATH + CALENDAR_MONTH_PARAM.format(m=m, y=y), timeout=30)
+        r.raise_for_status()
+        for ds, box in re.findall(r'dayid=["\'](\d{2}/\d{2}/\d{4})["\'](.*?)</div>', r.text, re.I | re.S):
+            dd = datetime.strptime(ds, "%m/%d/%Y").date()
+            if start <= dd <= end and calendar_day_wanted(box):
+                days.add(dd)
+        time.sleep(2)
+    return sorted(days)
 
 
-def fetch_results_site(site: str, day: date) -> list[dict]:
+def fetch_results_site(site: str, start: date, end: date) -> list[dict]:
     base = site.split("|")[0].rstrip("/")
     county = county_of(base)
     s = requests.Session()
     s.headers.update(HEADERS)
     s.get(base, timeout=30).raise_for_status()
-    if not auction_today(s, base, day):
-        print(f"[results] {county}: no sale on {day:%m/%d/%Y}")
-        return []
+    days = sale_days_between(s, base, start, end)
+    print(f"[results] {county}: sale days {start:%m/%d}–{end:%m/%d}: "
+          + (", ".join(f"{d:%m/%d}" for d in days) or "none"))
+    out = []
+    for day in days:
+        try:
+            out.extend(fetch_results_day(s, base, county, day))
+        except Exception as e:
+            print(f"[warn] results {county} {day:%m/%d/%Y}: {e}", file=sys.stderr)
+    return out
+
+
+def fetch_results_day(s: requests.Session, base: str, county: str, day: date) -> list[dict]:
     ds = day.strftime(DATE_FORMAT)
     time.sleep(2)
     s.get(base + PREVIEW_PATH.format(date=ds), timeout=30).raise_for_status()  # select the day
@@ -686,12 +707,12 @@ def result_row(i: dict) -> dict:
     }
 
 
-def collect_results(day: date, dry_run: bool) -> None:
+def collect_results(start: date, end: date, dry_run: bool) -> None:
     rows = load_results()
     found = []
     for site in BASE_URLS:
         try:
-            found.extend(fetch_results_site(site, day))
+            found.extend(fetch_results_site(site, start, end))
         except Exception as e:
             print(f"[error] results {site}: {e}", file=sys.stderr)
     types = {t.replace(" ", "") for t in AUCTION_TYPES}
@@ -731,14 +752,14 @@ def collect_results(day: date, dry_run: bool) -> None:
                 amt = f"${i['sold_amount']:,.0f}" if i.get("sold_amount") is not None else "n/a"
                 lines.append(f"  #{i['case']} {i['address'] or 'no address'} {i['city']} · {lu.title()} · "
                              f"opened ${i['bid'] or 0:,.0f} → sold {amt}{x} to {i['sold_to']}")
-        text = f"📊 Auction results {day:%m/%d}\n" + "\n".join(lines)
+        text = f"📊 Auction results {end:%m/%d}\n" + "\n".join(lines)
         if dry_run or not (TELEGRAM_TOKEN or SMTP_USER):
             print(text)
         else:
             if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
                 send_telegram(text)
             if SMTP_USER and SMTP_PASS:
-                send_email(f"📊 Auction results {day:%m/%d}", text)
+                send_email(f"📊 Auction results {end:%m/%d}", text)
 
 
 # ----------------------------------------------------------------------------
@@ -1115,8 +1136,8 @@ def main() -> None:
     ap.add_argument("--weekly", action="store_true", help="send the weekly results report")
     ap.add_argument("--results", action="store_true",
                     help="collect today's sale results into results.csv (run after the sales close)")
-    ap.add_argument("--date", help="with --results: sale date MM/DD/YYYY (default today); only "
-                                   "works while the site still shows that day")
+    ap.add_argument("--since", help="with --results: collect every sale day from MM/DD/YYYY to today "
+                                    f"(default: the last {RESULTS_DAYS_BACK} days)")
     args = ap.parse_args()
 
     if args.weekly:
@@ -1124,8 +1145,10 @@ def main() -> None:
         return
 
     if args.results:
-        day = datetime.strptime(args.date, "%m/%d/%Y").date() if args.date else date.today()
-        collect_results(day, args.dry_run)
+        end = date.today()
+        start = (datetime.strptime(args.since, "%m/%d/%Y").date() if args.since
+                 else end - timedelta(days=RESULTS_DAYS_BACK))
+        collect_results(start, end, args.dry_run)
         return
 
     if args.folio:
