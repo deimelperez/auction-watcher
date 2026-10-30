@@ -3,7 +3,12 @@ name: auction-results
 on:
   schedule:
     - cron: "0 22 * * 1-5"  # weekdays, 6 PM Miami (EDT); 5 PM in winter. After the day's sales close.
-  workflow_dispatch:        # "Run workflow" button: collects today's results
+  workflow_dispatch:        # "Run workflow" button
+    inputs:
+      since:
+        description: "Collect every sale day from this date (MM/DD/YYYY). Empty = last 7 days."
+        required: false
+        default: ""
 
 permissions:
   contents: write           # lets the job commit results.csv back
@@ -27,11 +32,15 @@ jobs:
           BASE_URL: "https://www.miamidade.realforeclose.com,https://broward.realtaxdeed.com"
           AUCTION_TYPES: TAXDEED
           RESULTS_NOTIFY: "1"           # short summary of sold items; "0" = just save the data
+          RESULTS_DAYS_BACK: "7"        # re-check this many days back, so a missed run is caught up
+          SINCE: ${{ github.event.inputs.since }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
-        run: python auction_watcher.py --results
+        run: |
+          if [ -n "$SINCE" ]; then python auction_watcher.py --results --since "$SINCE"
+          else python auction_watcher.py --results; fi
       - name: Save results
         run: |
           git config user.name "auction-watcher"
