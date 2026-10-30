@@ -1,0 +1,28 @@
+name: auction-weekly-report
+
+on:
+  schedule:
+    - cron: "0 13 * * 6"    # Saturdays, 9 AM Miami (EDT); 8 AM in winter
+  workflow_dispatch:        # "Run workflow" button: send the report now
+
+permissions:
+  contents: read            # only reads results.csv and seen.json
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Send weekly report
+        env:
+          TZ: America/New_York          # "this week" = Miami dates
+          PROPERTY_MAX_BID: "100000"    # same as watch.yml
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+        run: python auction_watcher.py --weekly
