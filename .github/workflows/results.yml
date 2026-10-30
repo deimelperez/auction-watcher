@@ -31,7 +31,7 @@ jobs:
           TZ: America/New_York          # "today" = Miami date
           BASE_URL: "https://www.miamidade.realforeclose.com,https://broward.realtaxdeed.com"
           AUCTION_TYPES: TAXDEED
-          RESULTS_NOTIFY: "1"           # short summary of sold items; "0" = just save the data
+          RESULTS_NOTIFY: "0"           # just save the data; results go in the Saturday report
           RESULTS_DAYS_BACK: "7"        # re-check this many days back, so a missed run is caught up
           SINCE: ${{ github.event.inputs.since }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
