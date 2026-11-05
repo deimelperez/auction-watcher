@@ -371,7 +371,9 @@
    "total_val": 870
   },
   "ok": true,
-  "reminded": [],
+  "reminded": [
+   7
+  ],
   "sale_date": "11/12/2026"
  },
  "miamidade:1519809": {
@@ -404,7 +406,9 @@
    "total_val": 886213
   },
   "ok": true,
-  "reminded": [],
+  "reminded": [
+   7
+  ],
   "sale_date": "11/12/2026"
  },
  "miamidade:1519829": {
