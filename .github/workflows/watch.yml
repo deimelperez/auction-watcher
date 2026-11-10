@@ -2,7 +2,9 @@ name: auction-watcher
 
 on:
   schedule:
-    - cron: "0 12 * * *"   # daily, 8 AM Miami (EDT); 7 AM in winter
+    # Daily, 5:23 AM Miami in winter (6:23 in summer). Not on the hour on purpose:
+    # GitHub starts on-the-hour jobs many hours late (the old 7 AM run was arriving at noon-5 PM).
+    - cron: "23 10 * * *"
   workflow_dispatch:        # "Run workflow" button for manual tests
 
 permissions:
@@ -15,6 +17,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -26,13 +29,18 @@ jobs:
           # comma-separated auction sites (public calendars, no login)
           BASE_URL: "https://www.miamidade.realforeclose.com,https://broward.realtaxdeed.com"
           AUCTION_TYPES: TAXDEED
+          TZ: America/New_York          # "today" = Miami date
           MAX_BID: "25000"              # vacant lots: max opening bid
           PROPERTY_MAX_BID: "100000"    # any non-condo property: max opening bid; 0 = off
           ZIPS: ""
           DAYS_AHEAD: "45"
           REMIND_DAYS: "7,1"            # reminders this many days before each sale
           LAND_USE_KEYWORDS: "VACANT+RESIDENTIAL"   # + means AND, comma means OR; empty = any
-          EXCLUDE_LAND_USE: "CONDOMINIUM,CONDO"   # never alert on these land uses
+          EXCLUDE_LAND_USE: "CONDOMINIUM,CONDO,COOPERATIVE"   # never alert on these land uses
+          SKIP_DOR_CODES: "4,5,9,94,95,96,97,98"  # condos, co-ops, common areas, roads/canals, lakes, marsh, parks
+          MIN_LOT_WIDTH_FT: "40"        # vacant land narrower than this is graded "probably not for you"
+          LOW_LAND_VALUE_PSF: "2"       # so is land the county values below this many $ per sq ft
+          REMIND_ALL: "0"               # 1 = send reminders for every match, not just the good ones
           MIN_LOT_SQFT: "5000"          # smallest lot to alert on; 0 = no minimum
           COMP_RADIUS_FT: "2640"        # comparable sales within half a mile (doubles if too few)
           COMP_YEARS: "3"               # sales from the last 3 years
