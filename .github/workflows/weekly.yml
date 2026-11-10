@@ -2,7 +2,7 @@ name: auction-weekly-report
 
 on:
   schedule:
-    - cron: "0 13 * * 6"    # Saturdays, 9 AM Miami (EDT); 8 AM in winter
+    - cron: "17 12 * * 6"   # Saturdays, 7:17 AM Miami in winter (8:17 in summer)
   workflow_dispatch:        # "Run workflow" button: send the report now
 
 permissions:
@@ -11,6 +11,7 @@ permissions:
 jobs:
   weekly:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
