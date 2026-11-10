@@ -2,7 +2,7 @@ name: auction-results
 
 on:
   schedule:
-    - cron: "0 22 * * 1-5"  # weekdays, 6 PM Miami (EDT); 5 PM in winter. After the day's sales close.
+    - cron: "43 22 * * 1-5"  # weekdays, 5:43 PM Miami in winter (6:43 in summer), after the sales close
   workflow_dispatch:        # "Run workflow" button
     inputs:
       since:
@@ -20,6 +20,7 @@ concurrency:
 jobs:
   results:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
