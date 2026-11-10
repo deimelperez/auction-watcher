@@ -19,6 +19,7 @@ import argparse
 import csv
 import html
 import json
+import math
 import os
 import re
 import smtplib
@@ -90,10 +91,12 @@ SMTP_PASS = os.getenv("SMTP_PASS", "")        # Gmail app password
 EMAIL_TO = os.getenv("EMAIL_TO", SMTP_USER)
 
 # Land-use lookup (Miami-Dade parcel layer, public ArcGIS REST, no key needed)
-PA_LAYER_URL = os.getenv(
-    "PA_LAYER_URL",
-    "https://gisweb.miamidade.gov/arcgis/rest/services/MD_LandInformation/MapServer/26",
-)
+MD_SERVICE_URL = os.getenv(
+    "MD_SERVICE_URL", "https://gisweb.miamidade.gov/arcgis/rest/services/MD_LandInformation/MapServer")
+PA_LAYER_URL = os.getenv("PA_LAYER_URL", f"{MD_SERVICE_URL}/26")     # parcels (polygons)
+PA_POINTS_URL = os.getenv("PA_POINTS_URL", f"{MD_SERVICE_URL}/24")   # every folio, condo units included
+# FEMA national flood hazard layer (flood zone at a point), both counties
+FEMA_NFHL_URL = os.getenv("FEMA_NFHL_URL", "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28")
 # Alert only if the land-use description contains one of these words.
 # Empty = no land-use filter. Parcels whose land use can't be found are still alerted.
 # Broward (and any non-Miami-Dade county): Florida DOR statewide parcel layer.
@@ -106,8 +109,30 @@ FDOR_COUNTY_NO = {"miamidade": 23, "broward": 16}
 # Standard Florida DOR land-use codes (the statewide layer gives codes, not descriptions).
 DOR_CODES = {
     0: "VACANT RESIDENTIAL", 1: "SINGLE FAMILY", 2: "MOBILE HOMES", 3: "MULTI-FAMILY 10+ UNITS",
-    4: "CONDOMINIUM", 5: "COOPERATIVES", 8: "MULTI-FAMILY <10 UNITS", 9: "RESIDENTIAL COMMON AREAS",
-    10: "VACANT COMMERCIAL", 40: "VACANT INDUSTRIAL", 70: "VACANT INSTITUTIONAL", 80: "VACANT GOVERNMENTAL",
+    4: "CONDOMINIUM", 5: "COOPERATIVES", 6: "RETIREMENT HOMES", 7: "MISCELLANEOUS RESIDENTIAL",
+    8: "MULTI-FAMILY <10 UNITS", 9: "RESIDENTIAL COMMON AREAS",
+    10: "VACANT COMMERCIAL", 11: "STORES", 12: "MIXED USE STORE/OFFICE", 13: "DEPARTMENT STORES",
+    14: "SUPERMARKETS", 15: "REGIONAL SHOPPING CENTERS", 16: "COMMUNITY SHOPPING CENTERS",
+    17: "OFFICE BUILDINGS", 18: "OFFICE BUILDINGS (MULTI-STORY)", 19: "PROFESSIONAL SERVICE BUILDINGS",
+    20: "AIRPORTS, TERMINALS, MARINAS", 21: "RESTAURANTS", 22: "DRIVE-IN RESTAURANTS",
+    23: "FINANCIAL INSTITUTIONS", 24: "INSURANCE COMPANY OFFICES", 25: "REPAIR SERVICE SHOPS",
+    26: "SERVICE STATIONS", 27: "AUTO SALES AND REPAIR", 28: "PARKING LOTS, MOBILE HOME PARKS",
+    29: "WHOLESALE OUTLETS", 30: "FLORISTS, GREENHOUSES", 31: "DRIVE-IN THEATERS, OPEN STADIUMS",
+    32: "ENCLOSED THEATERS", 33: "NIGHTCLUBS, BARS", 34: "BOWLING ALLEYS, SKATING RINKS",
+    35: "TOURIST ATTRACTIONS", 36: "CAMPS", 37: "RACE TRACKS", 38: "GOLF COURSES", 39: "HOTELS, MOTELS",
+    40: "VACANT INDUSTRIAL", 41: "LIGHT MANUFACTURING", 42: "HEAVY INDUSTRIAL", 43: "LUMBER YARDS",
+    44: "PACKING PLANTS", 45: "CANNERIES, BOTTLERS", 46: "OTHER FOOD PROCESSING", 47: "MINERAL PROCESSING",
+    48: "WAREHOUSING", 49: "OPEN STORAGE",
+    **{c: "AGRICULTURAL" for c in range(50, 70)},
+    70: "VACANT INSTITUTIONAL", 71: "CHURCHES", 72: "PRIVATE SCHOOLS", 73: "PRIVATE HOSPITALS",
+    74: "HOMES FOR THE AGED", 75: "NON-PROFIT SERVICES", 76: "MORTUARIES, CEMETERIES", 77: "CLUBS, LODGES",
+    78: "REST HOMES", 79: "CULTURAL ORGANIZATIONS",
+    80: "VACANT GOVERNMENTAL", 81: "MILITARY", 82: "FOREST, PARKS, RECREATION", 83: "PUBLIC SCHOOLS",
+    84: "COLLEGES", 85: "HOSPITALS", 86: "COUNTY PROPERTY", 87: "STATE PROPERTY", 88: "FEDERAL PROPERTY",
+    89: "MUNICIPAL PROPERTY", 90: "LEASEHOLD INTERESTS", 91: "UTILITIES", 92: "MINING",
+    93: "SUBSURFACE RIGHTS", 94: "RIGHT-OF-WAY (STREETS, ROADS, CANALS)",
+    95: "RIVERS, LAKES, SUBMERGED LAND", 96: "WASTE LAND, MARSH, DRAINAGE", 97: "OUTDOOR RECREATION, PARK LAND",
+    98: "CENTRALLY ASSESSED", 99: "ACREAGE NOT ZONED AGRICULTURAL",
 }
 
 # Comparable sales (from the statewide layer): vacant residential lots sold nearby.
@@ -122,11 +147,22 @@ LAND_USE_KEYWORDS = [
     for k in os.getenv("LAND_USE_KEYWORDS", "VACANT+RESIDENTIAL").split(",") if k.strip()
 ]
 # Never alert on these land uses (matched anywhere in the land-use description).
-EXCLUDE_LAND_USE = [k.strip().upper() for k in os.getenv("EXCLUDE_LAND_USE", "CONDOMINIUM,CONDO").split(",") if k.strip()]
+EXCLUDE_LAND_USE = [k.strip().upper() for k in os.getenv("EXCLUDE_LAND_USE", "CONDOMINIUM,CONDO,COOPERATIVE").split(",") if k.strip()]
+# Never alert on these Florida DOR use codes: 4 condo, 5 co-op, 9 common areas, 94 roads and canals,
+# 95 lakes and submerged land, 96 waste land and marsh, 97 park land, 98 centrally assessed.
+SKIP_DOR_CODES = {int(c) for c in os.getenv("SKIP_DOR_CODES", "4,5,9,94,95,96,97,98").split(",") if c.strip()}
 # Minimum lot size in square feet (0 = no minimum). Screens out slivers and too-small lots.
 MIN_LOT_SQFT = float(os.getenv("MIN_LOT_SQFT", "5000") or 0)
 # Florida East State Plane (US survey feet), so geometry areas come back in sq ft.
 AREA_SR = os.getenv("AREA_SR", "2236")
+# Vacant land is flagged as probably unbuildable when it is narrower than this...
+MIN_LOT_WIDTH_FT = float(os.getenv("MIN_LOT_WIDTH_FT", "40"))
+# ...or when the county values the land below this many dollars per square foot.
+LOW_LAND_VALUE_PSF = float(os.getenv("LOW_LAND_VALUE_PSF", "2"))
+# Reminders go only to listings graded "worth a look"; 1 = remind about every match.
+REMIND_ALL = os.getenv("REMIND_ALL", "0") not in ("0", "", "false", "no")
+COMP_FIELDS = "PARCEL_ID,SALE_PRC1,SALE_YR1,SALE_MO1,LND_SQFOOT,VI_CD1,QUAL_CD1,M_PAR_SAL1"
+STATE_VERSION = 2   # listings saved by an older version are re-checked once
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (personal auction watcher; 1 run/day)"}
 
@@ -168,6 +204,9 @@ def parse_response(text: str, sale_date: str = "") -> list[dict]:
         fields = {k.strip(): clean(v) for k, v in FIELD_RE.findall(chunk)}
         city = CITY_RE.search(chunk)
         city_line = clean(city.group(1)) if city else ""
+        address = fields.get("Property Address", "")
+        if not city_line and re.search(r",\s*FL\b", address, re.I):
+            city_line, address = address, ""
         zip_m = re.search(r"\b(\d{5})\b", city_line)
         items.append({
             "id": aid,
@@ -175,7 +214,7 @@ def parse_response(text: str, sale_date: str = "") -> list[dict]:
             "type": fields.get("Auction Type", "").upper(),
             "case": fields.get("Case #", ""),
             "parcel": fields.get("Parcel ID", ""),
-            "address": fields.get("Property Address", ""),
+            "address": address,
             "city": city_line,
             "zip": zip_m.group(1) if zip_m else "",
             # tax deed lists show Opening Bid; foreclosures show Final Judgment Amount
@@ -198,17 +237,6 @@ def keep(item: dict) -> bool:
     if ZIPS and item["zip"] and item["zip"] not in ZIPS:
         return False
     return True
-
-
-def tags(item: dict) -> list[str]:
-    t = []
-    if not item["address"]:
-        t.append("no street address (often vacant land)")
-    if item["parcel"].upper().startswith("MULTIPLE"):
-        t.append("multiple parcels")
-    if item["assessed"] is not None and item["assessed"] < 5000:
-        t.append("very low assessed value (possible sliver)")
-    return t
 
 
 # ----------------------------------------------------------------------------
@@ -268,9 +296,12 @@ def auction_days(s: requests.Session, base: str) -> list[str]:
                 if not (start <= dd <= end) or not calendar_day_wanted(box):
                     continue
                 found.add(dd)
+                act = re.search(r'CALACT[^>]*>\s*(\d+)', box, re.I)
+                CAL_ACTIVE[(county_of(base), dd.strftime(DATE_FORMAT))] = int(act.group(1)) if act else 0
             time.sleep(2)
     except Exception as e:
         print(f"[warn] {county_of(base)}: calendar: {e}", file=sys.stderr)
+        CAL_NOTE[county_of(base)] = f"could not read the auction calendar ({str(e)[:100]})"
     if found:
         print(f"[fetch] {county_of(base)}: calendar has {len(found)} auction day(s) in range")
         return [d.strftime(DATE_FORMAT) for d in sorted(found)]
@@ -278,6 +309,7 @@ def auction_days(s: requests.Session, base: str) -> list[str]:
     # which would put the wrong sale date on listings.
     print(f"[warn] {county_of(base)}: no tax deed sale days found on the calendar in the next "
           f"{DAYS_AHEAD} days", file=sys.stderr)
+    CAL_NOTE.setdefault(county_of(base), f"no tax deed sale days found on the calendar for the next {DAYS_AHEAD} days")
     return []
 
 
@@ -289,7 +321,8 @@ def fetch_site(site: str) -> list[dict]:
     s.get(base, timeout=30).raise_for_status()  # session cookies
 
     items, ids = [], set()
-    for ds in auction_days(s, base):
+    days = auction_days(s, base)
+    for ds in days:
         try:
             time.sleep(2)
             s.get(base + PREVIEW_PATH.format(date=ds), timeout=30).raise_for_status()  # select the day
@@ -317,6 +350,8 @@ def fetch_site(site: str) -> list[dict]:
             print(f"[fetch] {county} {ds}: {day_new} listing(s)")
         except Exception as e:  # one bad day shouldn't kill the run
             print(f"[warn] {county} {ds}: {e}", file=sys.stderr)
+    HEALTH[county] = {"expected": sum(CAL_ACTIVE.get((county, ds), 0) for ds in days), "parsed": len(items),
+                      "note": CAL_NOTE.get(county)}
     return items
 
 
@@ -327,81 +362,36 @@ def fetch_all() -> list[dict]:
             items.extend(fetch_site(site))
         except Exception as e:  # one unreachable site shouldn't stop the others
             print(f"[error] {site}: {e}", file=sys.stderr)
+            HEALTH[county_of(site.split("|")[0])] = {"error": str(e)}
     active = [i for i in items if i.get("status", "").upper() not in SKIP_STATUSES]
     print(f"[fetch] {len(items)} total, {len(items) - len(active)} skipped (canceled)")
     return active
 
 
 # ----------------------------------------------------------------------------
-# LAND USE (Property Appraiser parcel data)
+# PARCEL RESEARCH (Property Appraiser data, lot shape, zoning, flood zone, wetlands)
 # ----------------------------------------------------------------------------
 def folio_of(item: dict) -> str:
     digits = re.sub(r"\D", "", item["parcel"])
     return digits if len(digits) == 13 else ""
 
 
-def lookup_land_use(session: requests.Session, folio: str) -> dict | None:
-    """Return the parcel's attributes (plus _geom_sqft) from the county layer, or None."""
-    r = session.get(
-        f"{PA_LAYER_URL}/query",
-        params={"where": f"FOLIO='{folio}'", "outFields": "*", "returnGeometry": "true",
-                "outSR": AREA_SR, "f": "json"},
-        timeout=30,
-    )
+def dor2(code) -> int | None:
+    """Standard 2-digit Florida DOR use code. Miami-Dade gives 4 digits ('0081' -> 0, '9981' -> 99),
+    the statewide layer gives 3 ('000' -> 0, '094' -> 94)."""
+    s = re.sub(r"\D", "", str(code if code is not None else ""))
+    if not s:
+        return None
+    return int(s[:2]) if len(s) == 4 else int(s)
+
+
+def _arc(session: requests.Session, url: str, params: dict, timeout: int = 40) -> list[dict]:
+    r = session.get(url, params={"f": "json", **params}, timeout=timeout)
     r.raise_for_status()
     data = r.json()
     if "error" in data:
         raise RuntimeError(data["error"])
-    feats = data.get("features") or []
-    if not feats:
-        return None
-    attrs = dict(feats[0].get("attributes") or {})
-    attrs["_geom_sqft"] = polygon_area(feats[0].get("geometry") or {})
-    attrs["_centroid"] = centroid(feats[0].get("geometry") or {})
-    return attrs
-
-
-def lookup_statewide(session: requests.Session, county: str, parcel: str) -> dict | None:
-    """Look up a parcel in the Florida DOR statewide layer and map it to the same keys
-    the Miami-Dade layer uses, so the rest of the script doesn't care which county it is."""
-    co = FDOR_COUNTY_NO.get(county)
-    pid = re.sub(r"[^0-9A-Za-z]", "", parcel).upper()
-    if co is None or not pid:
-        return None
-    feats, last_err = [], None
-    for co_expr in (f"CO_NO={co}", f"CO_NO='{co}'"):  # field may be numeric or text
-        r = session.get(
-            f"{STATEWIDE_LAYER_URL}/query",
-            params={"where": f"{co_expr} AND PARCEL_ID='{pid}'", "outFields": "*",
-                    "returnGeometry": "true", "outSR": AREA_SR, "f": "json"},
-            timeout=30,
-        )
-        r.raise_for_status()
-        data = r.json()
-        if "error" in data:
-            last_err = data["error"]
-            continue
-        feats = data.get("features") or []
-        break
-    else:
-        raise RuntimeError(last_err)
-    if not feats:
-        return None
-    a = dict(feats[0].get("attributes") or {})
-    try:
-        code = int(str(a.get("DOR_UC")).strip())
-    except (TypeError, ValueError):
-        code = None
-    return {
-        "DOR_CODE_CUR": a.get("DOR_UC"),
-        "DOR_DESC": DOR_CODES.get(code, f"DOR USE CODE {a.get('DOR_UC')}") if code is not None else "",
-        "LAND_VAL_CUR": a.get("LND_VAL"),
-        "TOTAL_VAL_CUR": a.get("JV"),
-        "LND_SQFOOT": a.get("LND_SQFOOT"),  # land sq ft, if the layer carries it
-        "_geom_sqft": polygon_area(feats[0].get("geometry") or {}),
-        "_centroid": centroid(feats[0].get("geometry") or {}),
-        "_pid": a.get("PARCEL_ID"),
-    }
+    return data.get("features") or []
 
 
 def polygon_area(geom: dict) -> float | None:
@@ -426,6 +416,90 @@ def centroid(geom: dict) -> tuple[float, float] | None:
     return sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
 
 
+def lot_dims(geom: dict) -> tuple[int, int] | None:
+    """(short side, long side) in feet of the tightest rectangle around the parcel."""
+    rings = geom.get("rings") or []
+    if not rings or len(rings[0]) < 4:
+        return None
+    pts, best = rings[0], None
+    for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
+        length = math.hypot(x2 - x1, y2 - y1)
+        if length < 1:
+            continue
+        ux, uy = (x2 - x1) / length, (y2 - y1) / length
+        a = [p[0] * ux + p[1] * uy for p in pts]
+        b = [-p[0] * uy + p[1] * ux for p in pts]
+        w, h = max(a) - min(a), max(b) - min(b)
+        if best is None or w * h < best[0] * best[1]:
+            best = (w, h)
+    return (round(min(best)), round(max(best))) if best else None
+
+
+def lookup_land_use(session: requests.Session, folio: str) -> dict | None:
+    """Miami-Dade parcel attributes (plus _geom_sqft, _centroid, _dims), or None.
+    Condo units have no polygon of their own, so they're looked up in the property-points layer."""
+    feats = _arc(session, f"{PA_LAYER_URL}/query",
+                 {"where": f"FOLIO='{folio}'", "outFields": "*", "returnGeometry": "true", "outSR": AREA_SR})
+    if feats:
+        attrs = dict(feats[0].get("attributes") or {})
+        geom = feats[0].get("geometry") or {}
+        attrs["_geom_sqft"] = polygon_area(geom)
+        attrs["_centroid"] = centroid(geom)
+        attrs["_dims"] = lot_dims(geom)
+        return attrs
+    feats = _arc(session, f"{PA_POINTS_URL}/query",
+                 {"where": f"FOLIO='{folio}'", "outFields": "*", "returnGeometry": "false"})
+    if not feats:
+        return None
+    attrs = dict(feats[0].get("attributes") or {})
+    x, y = attrs.get("X_COORD"), attrs.get("Y_COORD")
+    attrs.update({"_geom_sqft": None, "_centroid": (x, y) if x and y else None, "_dims": None})
+    return attrs
+
+
+def lookup_statewide(session: requests.Session, county: str, parcel: str) -> dict | None:
+    """Look up a parcel in the Florida DOR statewide layer and map it to the same keys
+    the Miami-Dade layer uses, so the rest of the script doesn't care which county it is."""
+    co = FDOR_COUNTY_NO.get(county)
+    pid = re.sub(r"[^0-9A-Za-z]", "", parcel).upper()
+    if co is None or not pid:
+        return None
+    feats, last_err = [], None
+    for co_expr in (f"CO_NO={co}", f"CO_NO='{co}'"):  # field may be numeric or text
+        try:
+            feats = _arc(session, f"{STATEWIDE_LAYER_URL}/query",
+                         {"where": f"{co_expr} AND PARCEL_ID='{pid}'", "outFields": "*",
+                          "returnGeometry": "true", "outSR": AREA_SR})
+            break
+        except RuntimeError as e:
+            last_err = e
+    else:
+        raise RuntimeError(last_err)
+    if not feats:
+        return None
+    a = dict(feats[0].get("attributes") or {})
+    geom = feats[0].get("geometry") or {}
+    code = dor2(a.get("DOR_UC"))
+    return {
+        "DOR_CODE_CUR": a.get("DOR_UC"),
+        "DOR_DESC": DOR_CODES.get(code, f"DOR USE CODE {a.get('DOR_UC')}") if code is not None else "",
+        "LAND_VAL_CUR": a.get("LND_VAL"),
+        "TOTAL_VAL_CUR": a.get("JV"),
+        "LND_SQFOOT": a.get("LND_SQFOOT"),  # land sq ft, if the layer carries it
+        "TRUE_OWNER1": a.get("OWN_NAME"),
+        "TRUE_SITE_ADDR": a.get("PHY_ADDR1"),
+        "TRUE_SITE_CITY": a.get("PHY_CITY"),
+        "TRUE_SITE_ZIP_CODE": a.get("PHY_ZIPCD"),
+        "YEAR_BUILT": a.get("ACT_YR_BLT"),
+        "BUILDING_HEATED_AREA": a.get("TOT_LVG_AR"),
+        "UNIT_COUNT": a.get("NO_RES_UNT"),
+        "_geom_sqft": polygon_area(geom),
+        "_centroid": centroid(geom),
+        "_dims": lot_dims(geom),
+        "_pid": a.get("PARCEL_ID"),
+    }
+
+
 def lot_sqft(attrs: dict) -> tuple[float | None, str]:
     """Lot size in sq ft: a lot-size field if the layer has one, else the parcel polygon's area."""
     for k, v in attrs.items():
@@ -440,12 +514,51 @@ def lot_sqft(attrs: dict) -> tuple[float | None, str]:
     return (g, "parcel shape") if g else (None, "")
 
 
+def _txt(v) -> str:
+    return str(v).strip() if v not in (None, "") else ""
+
+
+def _pos(v):
+    """Positive number or None (the county layers use 0 for 'none')."""
+    try:
+        return v if v and float(v) > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def land_use_record(a: dict) -> dict:
+    """The parcel facts we keep (in seen.json) and show in alerts."""
+    sqft, src = lot_sqft(a)
+    zip_m = re.search(r"\d{5}", _txt(a.get("TRUE_SITE_ZIP_CODE")))
+    c = a.get("_centroid")
+    return {
+        "code": a.get("DOR_CODE_CUR"),
+        "desc": _txt(a.get("DOR_DESC")),
+        "land_val": a.get("LAND_VAL_CUR"),
+        "total_val": a.get("TOTAL_VAL_CUR"),
+        "lot_sqft": round(sqft) if sqft else None,
+        "lot_src": src,
+        "dims": list(a["_dims"]) if a.get("_dims") else None,
+        "owner": _txt(a.get("TRUE_OWNER1")),
+        "site_addr": _txt(a.get("TRUE_SITE_ADDR")),
+        "site_city": _txt(a.get("TRUE_SITE_CITY")).title(),
+        "site_zip": zip_m.group() if zip_m else "",
+        "year_built": int(a["YEAR_BUILT"]) if _pos(a.get("YEAR_BUILT")) else None,
+        "living_sqft": round(a["BUILDING_HEATED_AREA"]) if _pos(a.get("BUILDING_HEATED_AREA")) else None,
+        "beds": _pos(a.get("BEDROOM_COUNT")),
+        "baths": _pos(a.get("BATHROOM_COUNT")),
+        "units": _pos(a.get("UNIT_COUNT")),
+        "condo": _txt(a.get("CONDO_FLAG")).upper() == "Y",
+        "xy": [round(c[0], 1), round(c[1], 1)] if c else None,
+    }
+
+
 def query_statewide(session: requests.Session, wheres: list[str], extra: dict) -> list[dict]:
     """Try WHERE variants (numeric vs text fields differ between layers) until one is accepted."""
     last_err = None
     for where in wheres:
         r = session.get(f"{STATEWIDE_LAYER_URL}/query",
-                        params={"where": where, "outFields": "*", "f": "json", **extra}, timeout=60)
+                        params={"where": where, "outFields": COMP_FIELDS, "f": "json", **extra}, timeout=75)
         r.raise_for_status()
         data = r.json()
         if "error" in data:
@@ -456,7 +569,9 @@ def query_statewide(session: requests.Session, wheres: list[str], extra: dict) -
 
 
 def find_comps(session: requests.Session, county: str, xy: tuple[float, float], exclude_pid: str = "") -> dict | None:
-    """Vacant residential lots sold near a point. Returns a summary with median $/sq ft."""
+    """Vacant residential lots sold near a point. Returns a summary with median $/sq ft.
+    Only land that was vacant when it sold counts: a lot sold with a new house on it still
+    shows as 'vacant' on the tax roll and would otherwise inflate the number."""
     co = FDOR_COUNTY_NO.get(county)
     if co is None or not xy:
         return None
@@ -466,6 +581,7 @@ def find_comps(session: requests.Session, county: str, xy: tuple[float, float], 
         for c in (f"CO_NO={co}", f"CO_NO='{co}'")
         for u in ("DOR_UC IN ('000','00','0')", "DOR_UC=0")
     ]
+    sales, radius = [], COMP_RADIUS_FT
     for radius in (COMP_RADIUS_FT, COMP_RADIUS_FT * 2):
         feats = query_statewide(session, wheres, {
             "geometry": f"{xy[0]},{xy[1]}", "geometryType": "esriGeometryPoint", "inSR": AREA_SR,
@@ -483,7 +599,14 @@ def find_comps(session: requests.Session, county: str, xy: tuple[float, float], 
             sqft = a.get("LND_SQFOOT") or polygon_area(f.get("geometry") or {})
             if price and sqft and sqft > 500:
                 sales.append({"price": float(price), "sqft": float(sqft), "ppsf": float(price) / float(sqft),
-                              "year": a.get("SALE_YR1"), "month": a.get("SALE_MO1")})
+                              "vi": _txt(a.get("VI_CD1")).upper(), "qual": _txt(a.get("QUAL_CD1")),
+                              "multi": _txt(a.get("M_PAR_SAL1"))})
+        if any(x["vi"] in ("V", "I") for x in sales):      # vacant/improved-at-sale code is filled in
+            sales = [x for x in sales if x["vi"] == "V"]
+        sales = [x for x in sales if not x["multi"]]        # one price for several parcels: skip
+        qualified = [x for x in sales if x["qual"] in ("01", "02")]  # arm's-length sales
+        if len(qualified) >= COMP_MIN:
+            sales = qualified
         if len(sales) >= COMP_MIN or radius != COMP_RADIUS_FT:
             break
     if not sales:
@@ -495,7 +618,11 @@ def find_comps(session: requests.Session, county: str, xy: tuple[float, float], 
             "low_ppsf": round(ppsf[0], 2), "high_ppsf": round(ppsf[-1], 2)}
 
 
+LOOKUPS: dict[str, list[int]] = {}   # county -> [tried, found]; used by the health check
+
+
 def enrich(items: list[dict]) -> None:
+    """Look up each parcel's county record (land use, size, value, owner...)."""
     s = requests.Session()
     s.headers.update(HEADERS)
     for item in items:
@@ -509,53 +636,135 @@ def enrich(items: list[dict]) -> None:
             folio = re.sub(r"[^0-9A-Za-z]", "", item["parcel"]).upper()
             if not folio or item["parcel"].upper().startswith("MULTIPLE"):
                 continue
+        stat = LOOKUPS.setdefault(county, [0, 0])
+        stat[0] += 1
         try:
-            if county == "miamidade":
-                a = lookup_land_use(s, folio)
-            else:
-                a = lookup_statewide(s, county, item["parcel"])
+            a = lookup_land_use(s, folio) if county == "miamidade" else lookup_statewide(s, county, item["parcel"])
         except Exception as e:
             print(f"[warn] land use {county} {folio}: {e}", file=sys.stderr)
             continue
         if not a:
             print(f"[land use] {county} {folio}: not found")
-        if a:
-            sqft, src = lot_sqft(a)
-            item["land_use"] = {
-                "code": a.get("DOR_CODE_CUR"),
-                "desc": (a.get("DOR_DESC") or "").strip(),
-                "land_val": a.get("LAND_VAL_CUR"),
-                "total_val": a.get("TOTAL_VAL_CUR"),
-                "lot_sqft": round(sqft) if sqft else None,
-                "lot_src": src,
-            }
-            # comparable sales only for lots that pass the filter (keeps requests low)
-            if land_use_ok(item) and bid_under(item, MAX_BID):
-                try:
-                    item["land_use"]["comps"] = find_comps(s, county, a.get("_centroid"), a.get("_pid") or folio)
-                except Exception as e:
-                    print(f"[warn] comps {county} {folio}: {e}", file=sys.stderr)
-            # shows in the Actions log so you can see the county's real descriptions
-            print(f"[land use] {county} {folio}: {item['land_use']['code']} {item['land_use']['desc']!r}, "
-                  f"lot {item['land_use']['lot_sqft']} sq ft ({src or 'unknown'})")
-        time.sleep(1)
+            continue
+        stat[1] += 1
+        lu = item["land_use"] = land_use_record(a)
+        lu["_pid"] = a.get("_pid") or folio
+        # the auction site leaves the address blank for land with no house number
+        if not item.get("city") and lu["site_city"]:
+            item["city"] = lu["site_city"] + (f", FL- {lu['site_zip']}" if lu["site_zip"] else "")
+        if not item.get("zip") and lu["site_zip"]:
+            item["zip"] = lu["site_zip"]
+        print(f"[land use] {county} {folio}: {lu['code']} {lu['desc']!r}, lot {lu['lot_sqft']} sq ft")
+        time.sleep(0.7)
 
 
-def is_excluded(item: dict) -> bool:
-    desc = ((item.get("land_use") or {}).get("desc") or "").upper()
-    return any(x in desc for x in EXCLUDE_LAND_USE)
+def research(items: list[dict]) -> None:
+    """Extra checks for listings that will be alerted: map location, zoning, wetlands,
+    flood zone, and (for vacant lots) nearby lot sales. Every check is optional."""
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    for item in items:
+        lu = item.get("land_use")
+        if not lu:
+            continue
+        county, pid = item.get("county", "miamidade"), lu.get("_pid")
+        try:  # latitude / longitude for the map links
+            if county == "miamidade":
+                g = _arc(s, f"{PA_POINTS_URL}/query", {"where": f"FOLIO='{pid}'", "outFields": "FOLIO",
+                                                        "returnGeometry": "true", "outSR": "4326"})
+                lon, lat = (g[0]["geometry"]["x"], g[0]["geometry"]["y"]) if g else (None, None)
+            else:
+                g = _arc(s, f"{STATEWIDE_LAYER_URL}/query",
+                         {"where": f"CO_NO={FDOR_COUNTY_NO[county]} AND PARCEL_ID='{pid}'",
+                          "outFields": "PARCEL_ID", "returnGeometry": "true", "outSR": "4326"})
+                lon, lat = centroid(g[0].get("geometry") or {}) if g else (None, None)
+            if lat and lon:
+                lu["lat"], lu["lon"] = round(lat, 6), round(lon, 6)
+        except Exception as e:
+            print(f"[warn] location {county} {pid}: {e}", file=sys.stderr)
+        xy = lu.get("xy")
+        if county == "miamidade" and xy:  # county GIS: zoning and wetlands at the parcel
+            pt = {"geometry": f"{xy[0]},{xy[1]}", "geometryType": "esriGeometryPoint", "inSR": AREA_SR,
+                  "spatialRel": "esriSpatialRelIntersects", "returnGeometry": "false"}
+            try:
+                z = _arc(s, f"{MD_SERVICE_URL}/19/query", {**pt, "outFields": "ZONE,ZONEDESC,MUNICNAME"})
+                za = (z[0]["attributes"] if z else {})
+                if _txt(za.get("ZONE")).upper() not in ("", "NONE"):
+                    lu["zone"], lu["zone_desc"] = _txt(za.get("ZONE")), _txt(za.get("ZONEDESC"))
+                    lu["muni"] = _txt(za.get("MUNICNAME")).title()
+                else:  # unincorporated: county zoning
+                    z = _arc(s, f"{MD_SERVICE_URL}/18/query", {**pt, "outFields": "ZONE,ZONE_DESC"})
+                    if z:
+                        lu["zone"] = _txt(z[0]["attributes"].get("ZONE"))
+                        lu["zone_desc"] = _txt(z[0]["attributes"].get("ZONE_DESC"))
+                    lu["muni"] = "Unincorporated Miami-Dade"
+            except Exception as e:
+                print(f"[warn] zoning {pid}: {e}", file=sys.stderr)
+            try:
+                w = _arc(s, f"{MD_SERVICE_URL}/36/query", {**pt, "outFields": "TYPE"})
+                if w:
+                    lu["wetland"] = _txt(w[0]["attributes"].get("TYPE")) or "yes"
+            except Exception as e:
+                print(f"[warn] wetlands {pid}: {e}", file=sys.stderr)
+        if lu.get("lat"):
+            try:  # FEMA flood zone (national flood hazard layer)
+                fz = _arc(s, f"{FEMA_NFHL_URL}/query",
+                          {"geometry": f"{lu['lon']},{lu['lat']}", "geometryType": "esriGeometryPoint", "inSR": "4326",
+                           "spatialRel": "esriSpatialRelIntersects", "outFields": "FLD_ZONE,ZONE_SUBTY",
+                           "returnGeometry": "false"}, timeout=30)
+                if fz:
+                    lu["flood"] = _txt(fz[0]["attributes"].get("FLD_ZONE"))
+            except Exception as e:
+                print(f"[warn] flood zone {pid}: {e}", file=sys.stderr)
+        if item.get("cat") == "lot" and xy:
+            try:
+                lu["comps"] = find_comps(s, county, tuple(xy), pid)
+            except Exception as e:
+                print(f"[warn] comps {county} {pid}: {e}", file=sys.stderr)
+        time.sleep(0.7)
 
 
+# ----------------------------------------------------------------------------
+# MATCHING: which listings are alerted, and how good each one looks
+# ----------------------------------------------------------------------------
 def bid_under(item: dict, limit: float) -> bool:
     return not limit or item.get("bid") is None or item["bid"] <= limit
 
 
+def is_vacant(lu: dict) -> bool:
+    if lu.get("living_sqft") or lu.get("year_built"):
+        return False
+    return dor2(lu.get("code")) in (0, 10, 40, 70, 80, 99) or "VACANT" in (lu.get("desc") or "").upper()
+
+
+def is_excluded(item: dict) -> bool:
+    """Condos, co-ops and land that can't hold a building (roads, canals, lakes, common areas)."""
+    lu = item.get("land_use") or {}
+    desc = (lu.get("desc") or "").upper()
+    return bool(lu.get("condo")) or dor2(lu.get("code")) in SKIP_DOR_CODES or any(x in desc for x in EXCLUDE_LAND_USE)
+
+
+def land_use_ok(item: dict) -> bool:
+    """A vacant residential lot big enough to build on."""
+    lu = item.get("land_use")
+    if not lu or is_excluded(item):
+        return False
+    desc = (lu.get("desc") or "").upper()
+    by_words = bool(LAND_USE_KEYWORDS) and any(all(w in desc for w in group) for group in LAND_USE_KEYWORDS)
+    if not (by_words or (dor2(lu.get("code")) == 0 and is_vacant(lu)) or not LAND_USE_KEYWORDS):
+        return False
+    sqft = lu.get("lot_sqft")
+    return not (MIN_LOT_SQFT and sqft and sqft < MIN_LOT_SQFT)
+
+
 def category(item: dict) -> str | None:
-    """'lot' = vacant residential lot to build on (the original search),
-    'property' = any non-condo property under PROPERTY_MAX_BID, None = no alert."""
+    """'lot' = vacant residential lot to build on, 'property' = any other non-condo
+    property with an opening bid under PROPERTY_MAX_BID, None = no alert."""
+    if is_excluded(item):
+        return None
     if land_use_ok(item) and bid_under(item, MAX_BID):
         return "lot"
-    if PROPERTY_MAX_BID and not is_excluded(item) and bid_under(item, PROPERTY_MAX_BID):
+    if PROPERTY_MAX_BID and bid_under(item, PROPERTY_MAX_BID):
         return "property"
     return None
 
@@ -563,20 +772,99 @@ def category(item: dict) -> str | None:
 CAT_LABEL = {"lot": "🌱 Vacant lot", "property": f"🏠 Property under ${PROPERTY_MAX_BID:,.0f}"}
 
 
-def land_use_ok(item: dict) -> bool:
-    """Buildable-residential screen. Unknown values pass, so a human can take a look."""
-    lu = item.get("land_use")
-    if not lu:
-        return True
-    desc = (lu.get("desc") or "").upper()
-    if any(x in desc for x in EXCLUDE_LAND_USE):
-        return False
-    if LAND_USE_KEYWORDS and desc and not any(all(w in desc for w in group) for group in LAND_USE_KEYWORDS):
-        return False
-    sqft = lu.get("lot_sqft")
-    if MIN_LOT_SQFT and sqft and sqft < MIN_LOT_SQFT:
-        return False
-    return True
+def red_flags(item: dict) -> list[str]:
+    """Reasons a piece of vacant land probably can't be built on."""
+    lu = item.get("land_use") or {}
+    if not lu or not is_vacant(lu):
+        return []
+    f = []
+    sqft, land, dims = lu.get("lot_sqft"), lu.get("land_val"), lu.get("dims")
+    if sqft and MIN_LOT_SQFT and sqft < MIN_LOT_SQFT:
+        f.append(f"small lot ({sqft:,} sq ft)")
+    if sqft and dims and dims[1] and sqft / dims[1] < MIN_LOT_WIDTH_FT:
+        f.append(f"narrow strip, about {sqft / dims[1]:.0f} ft wide")
+    low_value = bool(sqft and land is not None and land / sqft < LOW_LAND_VALUE_PSF)
+    if low_value:
+        f.append(f"county values the land at only ${land / sqft:,.2f}/sq ft, which usually means it can't be built on")
+    if dor2(lu.get("code")) == 99:
+        f.append("raw acreage outside the developed area")
+    if lu.get("wetland"):
+        f.append("in a county wetland area of concern")
+    c = lu.get("comps") or {}
+    if not low_value and c.get("n", 0) >= COMP_MIN and sqft and land and land / sqft < 0.25 * c["median_ppsf"]:
+        f.append("county value is far below nearby lot sales")
+    return f
+
+
+def notes(item: dict) -> list[str]:
+    """Things worth knowing that don't rule a listing out."""
+    lu = item.get("land_use") or {}
+    n = []
+    if not item.get("land_use"):
+        n.append("county record not found, check it by hand")
+    if item["parcel"].upper().startswith("MULTIPLE"):
+        n.append("several parcels sold together")
+    if not item.get("address") and not lu.get("site_addr"):
+        n.append("no street address, check road access on the map")
+    if (lu.get("flood") or "").upper().startswith(("A", "V")):
+        n.append(f"flood zone {lu['flood']} (flood insurance and a raised floor are required)")
+    return n
+
+
+_RATIO: tuple[float, float, int] | None = None
+
+
+def price_ratio() -> tuple[float, float, int]:
+    """What outside bidders have paid as a share of the county's market value, learned from
+    results.csv (25th-75th percentile). Until there are 5 sales, a 70-90% assumption."""
+    global _RATIO
+    if _RATIO is None:
+        r = []
+        for row in load_results().values():
+            try:
+                amt, val = float(row.get("sold_amount") or 0), float(row.get("pa_total_val") or 0)
+            except ValueError:
+                continue
+            if row.get("status") == "Sold" and "3RD PARTY" in (row.get("sold_to") or "").upper() and val >= 50000 and amt:
+                r.append(amt / val)
+        r.sort()
+        if len(r) >= 5:
+            q = lambda p: r[int(round((len(r) - 1) * p))]
+            _RATIO = (round(q(.25), 2), round(q(.75), 2), len(r))
+        else:
+            _RATIO = (0.70, 0.90, len(r))
+    return _RATIO
+
+
+def estimate(item: dict) -> list[float] | None:
+    """[low, high] likely winning price, from the county's market value of this parcel."""
+    lu = item.get("land_use") or {}
+    lo, hi, _ = price_ratio()
+    value = lu.get("land_val") if is_vacant(lu) else lu.get("total_val")
+    if not value or value < 20000 or red_flags(item):
+        return None
+    return [round(lo * value, -2), round(hi * value, -2)]
+
+
+def grade(item: dict) -> None:
+    """Sets item['flags'], item['est'] and item['tier']:
+    'A' = worth a look, 'B' = matches the search but probably not for you."""
+    item["flags"], item["est"] = red_flags(item), estimate(item)
+    over = item["cat"] == "property" and item["est"] and item["est"][0] > PROPERTY_MAX_BID
+    item["tier"] = "B" if item["flags"] or over else "A"
+    if over:
+        item["why"] = f"likely to sell for {_k(item['est'][0])}–{_k(item['est'][1])}"
+    elif item["flags"]:
+        item["why"] = item["flags"][0]
+    else:
+        item["why"] = ""
+
+
+def _k(v: float) -> str:
+    """$4,200 / $235K / $1.2M"""
+    if v >= 1_000_000:
+        return f"${v / 1_000_000:.1f}M"
+    return f"${v / 1000:,.0f}K" if v >= 10_000 else f"${v:,.0f}"
 
 
 # ----------------------------------------------------------------------------
@@ -694,8 +982,9 @@ def result_row(i: dict) -> dict:
     r2 = lambda x: "" if x is None else round(x, 2)
     return {
         "sale_date": i["sale_date"], "county": i["county"], "aid": i["aid"], "case": i["case"],
-        "certificate": i["raw"].get("Certificate #", ""), "parcel": i["parcel"], "address": i["address"],
-        "city": i["city"], "zip": i["zip"],
+        "certificate": i["raw"].get("Certificate #", ""), "parcel": i["parcel"],
+        "address": i["address"] or lu.get("site_addr") or "",
+        "city": i["city"] or lu.get("site_city") or "", "zip": i["zip"] or lu.get("site_zip") or "",
         "land_use_code": lu.get("code", ""), "land_use": lu.get("desc", ""), "lot_sqft": lu.get("lot_sqft") or "",
         "pa_land_val": r2(lu.get("land_val")), "pa_total_val": r2(lu.get("total_val")), "assessed": r2(i.get("assessed")),
         "opening_bid": r2(bid), "status": i["status"], "sold_to": i["sold_to"], "sold_amount": r2(amt),
@@ -731,14 +1020,28 @@ def collect_results(start: date, end: date, dry_run: bool) -> None:
     enrich(todo)
     for i in new:
         rows[i["id"]] = result_row(i)
-    print(f"[results] {len(new)} new result(s), {len(rows)} total in {RESULTS_FILE}")
+    # rows saved before the county lookup covered condo units: fill them in, a few per run
+    blank = [r for r in rows.values() if not r.get("land_use") and not r["parcel"].upper().startswith("MULTIPLE")][:40]
+    fix = [{"county": r["county"], "parcel": r["parcel"], "city": r.get("city"), "zip": r.get("zip"), "_row": r} for r in blank]
+    enrich(fix)
+    for f in fix:
+        lu = f.get("land_use")
+        if lu:
+            f["_row"].update({"land_use_code": lu.get("code") or "", "land_use": lu.get("desc") or "",
+                              "lot_sqft": lu.get("lot_sqft") or "",
+                              "pa_land_val": "" if lu.get("land_val") is None else lu["land_val"],
+                              "pa_total_val": "" if lu.get("total_val") is None else lu["total_val"],
+                              "address": f["_row"].get("address") or lu.get("site_addr") or "",
+                              "city": f["_row"].get("city") or lu.get("site_city") or ""})
+    print(f"[results] {len(new)} new result(s), {len(rows)} total in {RESULTS_FILE}"
+          + (f", {sum(1 for f in fix if f.get('land_use'))} older row(s) completed" if fix else ""))
     if not dry_run:
         ordered = sorted(rows.values(), key=lambda r: (datetime.strptime(r["sale_date"], DATE_FORMAT), r["county"], r["case"]))
         with RESULTS_FILE.open("w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=RESULT_FIELDS, extrasaction="ignore")
             w.writeheader()
             for r in ordered:  # rows saved before this column existed
-                if not r.get("property_link"):
+                if not r.get("property_link") or (r["county"] == "broward" and re.search(r"[A-Za-z]", r["parcel"])):
                     r["property_link"] = next((u for n, u in property_links(r["county"], r["parcel"]) if n == "Property"), "")
             w.writerows(ordered)
     sold = [i for i in new if i["status"] == "Sold"]
@@ -795,25 +1098,35 @@ def _pct(v: list[float], q: float) -> float | None:
     return v[lo] + (v[hi] - v[lo]) * (k - lo)
 
 
-def _group(desc: str) -> str:
+GROUPS = ("Vacant residential lots", "Small vacant lots", "Raw acreage", "Other vacant land", "Single family",
+          "Multi-family", "Mobile home", "Condo / co-op", "Other")
+
+
+def _group(desc: str, sqft: float | None = None) -> str:
     d = (desc or "").upper()
-    if "VACANT" in d and "RESIDENTIAL" in d:
-        return "Vacant residential"
+    if not d:
+        return "Unknown"
+    if "CONDO" in d or "COOPERATIVE" in d:
+        return "Condo / co-op"
+    if any(w in d for w in ("RIGHT-OF-WAY", "RIVERS, LAKES", "WASTE LAND", "COMMON AREAS", "PARK LAND", "DOR USE CODE 09")):
+        return "Roads, canals, lakes"
+    if "ACREAGE" in d:
+        return "Raw acreage"
+    if "VACANT" in d and ("RESIDENTIAL" in d or "TOWNHOUSE" in d):
+        return "Small vacant lots" if sqft and MIN_LOT_SQFT and sqft < MIN_LOT_SQFT else "Vacant residential lots"
     if "VACANT" in d:
-        return "Other vacant"
-    if "CONDO" in d:
-        return "Condo"
+        return "Other vacant land"
     if "SINGLE FAMILY" in d:
         return "Single family"
     if "MOBILE" in d:
         return "Mobile home"
     if "MULTI" in d:
         return "Multi-family"
-    return "Other" if d else "Unknown"
+    return "Other"
 
 
 def _city(r: dict) -> str:
-    return (r.get("city") or "").split(",")[0].strip().title() or "?"
+    return (r.get("city") or "").split(",")[0].strip().title() or "Unincorporated"
 
 
 COUNTY_NAME = {"miamidade": "Miami-Dade", "broward": "Broward"}
@@ -827,9 +1140,10 @@ def property_links(county: str, parcel: str) -> list[tuple[str, str]]:
     digits = re.sub(r"\D", "", parcel)
     if county == "miamidade" and len(digits) == 13:
         return [("Property", f"https://apps.miamidadepa.gov/propertysearch/#/?folio={digits}")]
-    if county == "broward" and digits:
-        return [("Property", f"https://bcpa.net/RecInfo.asp?URL_Folio={digits}"),
-                ("Map", f"https://gisweb-adapters.bcpa.net/bcpawebmap_ex/bcpawebmap.aspx?FOLIO={digits}")]
+    folio = re.sub(r"[^0-9A-Za-z]", "", parcel).upper()   # Broward folios can contain letters (484134-AB-0200)
+    if county == "broward" and folio:
+        return [("Property", f"https://bcpa.net/RecInfo.asp?URL_Folio={folio}"),
+                ("Map", f"https://gisweb-adapters.bcpa.net/bcpawebmap_ex/bcpawebmap.aspx?FOLIO={folio}")]
     return []
 
 
@@ -846,7 +1160,9 @@ def weekly_data(today: date) -> dict:
         r["_amt"], r["_bid"] = _f(r.get("sold_amount")), _f(r.get("opening_bid"))
         r["_x"], r["_xe"] = _f(r.get("x_opening")), _f(r.get("x_est_value"))
         r["_sq"] = _f(r.get("lot_sqft"))
-        r["_g"] = _group(r.get("land_use"))
+        r["_g"] = _group(r.get("land_use"), r["_sq"])
+        pa = _f(r.get("pa_total_val"))
+        r["_pv"] = r["_amt"] / pa if r["_amt"] and pa and pa >= 20000 else None  # paid vs county value
         r["_3p"] = "3RD PARTY" in (r.get("sold_to") or "").upper()
         r["_sold"] = r["status"] == "Sold"
         r["_links"] = property_links(r["county"], r.get("parcel"))
@@ -877,20 +1193,23 @@ def weekly_data(today: date) -> dict:
 
     # bidding guide (all data)
     guide = []
-    for g in ("Vacant residential", "Single family", "Multi-family", "Mobile home", "Other vacant", "Other"):
-        xs = [r["_x"] for r in d["third_all"] if r["_g"] == g]
-        if not xs:
+    for g in GROUPS:
+        sales = [r for r in d["third_all"] if r["_g"] == g]
+        if not sales:
             continue
-        ppsf = [r["_amt"] / r["_sq"] for r in d["third_all"] if r["_g"] == g and r["_amt"] and r["_sq"]]
+        xs = [r["_x"] for r in sales]
+        pv = [r["_pv"] for r in sales if r["_pv"]]
+        ppsf = [r["_amt"] / r["_sq"] for r in sales if r["_amt"] and r["_sq"]]
         guide.append({"type": g, "n": len(xs), "median": _median(xs), "p75": _pct(xs, .75),
-                      "ppsf": _median(ppsf) if g == "Vacant residential" and ppsf else None})
+                      "pv": _median(pv), "pv_n": len(pv),
+                      "ppsf": _median(ppsf) if g == "Vacant residential lots" and ppsf else None})
     d["guide"] = guide
-    d["guide_by_type"] = {g["type"]: g for g in guide if g["n"] >= 3}
-    xe = [r["_xe"] for r in d["third_all"] if r["_xe"] and r["_g"] == "Vacant residential"]
-    d["lot_vs_comps"] = (_median(xe), len(xe)) if len(xe) >= 3 else None
+    pv_all = [r["_pv"] for r in d["third_all"] if r["_pv"]]
+    d["pv"] = (_median(pv_all), len(pv_all)) if pv_all else None
     by_city: dict[str, list[float]] = {}
     for r in d["third_all"]:
-        by_city.setdefault(_city(r), []).append(r["_x"])
+        if r.get("city"):
+            by_city.setdefault(_city(r), []).append(r["_x"])
     d["cities"] = sorted(((c, _median(v), len(v)) for c, v in by_city.items() if len(v) >= 3),
                          key=lambda t: -t[1])[:5]
     d["county_rates"] = []
@@ -902,23 +1221,25 @@ def weekly_data(today: date) -> dict:
             "cert": sum(1 for r in c if r["_sold"] and not r["_3p"]) / len(c),
             "third": sum(1 for r in c if r["_sold"] and r["_3p"]) / len(c)})
 
-    # your matches in the next 7 days
-    up = []
+    # your matches in the next 7 days (still on the list, graded "worth a look")
+    up, others = [], 0
     for k, v in load_seen().items():
-        if k.startswith("_") or not v.get("ok"):
+        if k.startswith("_") or not v.get("ok") or v.get("gone") or v.get("v") != STATE_VERSION:
             continue
         dd = days_until(v.get("sale_date", ""), today)
         if dd is None or not 0 <= dd <= 7:
             continue
+        if v.get("last_seen") and (today - date.fromisoformat(v["last_seen"])).days > 3:
+            continue  # dropped off the auction list
+        if v.get("tier") != "A":
+            others += 1
+            continue
         county = k.split(":")[0]
-        desc = (v.get("land_use") or {}).get("desc") or ""
-        g = d["guide_by_type"].get(_group(desc))
-        bid = v.get("bid")
+        it = {**v, "county": county}
         up.append({"days": dd, "date": v["sale_date"], "county": COUNTY_NAME.get(county, county),
-                   "cat": v.get("cat"), "where": ", ".join(x for x in (v.get("address"), (v.get("city") or "").split(",")[0].title()) if x)
-                   or v.get("parcel") or "", "type": desc.title(), "bid": bid,
-                   "est": (bid * g["median"], bid * g["p75"]) if bid and g else None,
-                   "links": ([("Listing", v["link"])] if v.get("link") else []) + property_links(county, v.get("parcel"))})
+                   "cat": v.get("cat"), "where": where(it), "type": what(v.get("land_use") or {}),
+                   "bid": v.get("bid"), "est": v.get("est"), "links": links_of(it)})
+    d["upcoming_other"] = others
     d["upcoming"] = sorted(up, key=lambda u: u["days"])
     return d
 
@@ -982,8 +1303,9 @@ def weekly_charts(d: dict) -> dict[str, bytes]:
     # 2) opening bid vs price paid (outside bidders), log-log
     pts = [r for r in d["third_all"] if r["_bid"] and r["_amt"]]
     if pts:
-        groups = [("Vacant residential", C_BLUE), ("Single family", C_ORANGE), ("Other", C_AQUA)]
-        gof = lambda r: r["_g"] if r["_g"] in ("Vacant residential", "Single family") else "Other"
+        groups = [("Vacant land", C_BLUE), ("Single family", C_ORANGE), ("Other", C_AQUA)]
+        gof = lambda r: ("Vacant land" if "vacant" in r["_g"].lower() or r["_g"] == "Raw acreage"
+                         else r["_g"] if r["_g"] == "Single family" else "Other")
         fig, ax = plt.subplots(figsize=(7.2, 4.0))
         xlo, xhi = min(r["_bid"] for r in pts) * 0.7, max(r["_bid"] for r in pts) * 1.4
         ylo = min(min(r["_amt"] for r in pts), min(r["_bid"] for r in pts)) * 0.7
@@ -1097,6 +1419,8 @@ def weekly_html(d: dict, chart_src: dict[str, str]) -> str:
             pav = f" · PA value {_m(pa)}" if pa else ""
             ls = r["_links"] + ([("Listing", r["listing"])] if r.get("listing") else [])
             buyer = "outside bidder" if r["_3p"] else "cert holder"
+            if r["_pv"]:
+                buyer += f" · {r['_pv']:.0%} of county value"
             mult = f"{r['_x']:.1f}× · " if r["_x"] else ""
             P.append(f'<tr><td {td}>{r["_d"]:%m/%d}<br><span style="color:#52514e;font-size:11px">{e(COUNTY_NAME.get(r["county"], r["county"]))}</span></td>'
                      f'<td {td}><b>{e(r["address"] or "No address")}</b>, {e(_city(r))}<br>'
@@ -1121,16 +1445,19 @@ def weekly_html(d: dict, chart_src: dict[str, str]) -> str:
                  'These numbers become reliable after about 20.</p>')
     if d["guide"]:
         P.append('<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">')
-        P.append(f'<tr><th {th}>Property type</th><th {thr}>Sales</th><th {thr}>Median ×</th>'
-                 f'<th {thr}>75% sold ≤</th><th {thr}>$/sq ft</th></tr>')
+        P.append(f'<tr><th {th}>Property type</th><th {thr}>Sales</th><th {thr}>Median × opening</th>'
+                 f'<th {thr}>Paid vs county value</th><th {thr}>$/sq ft</th></tr>')
         for g in d["guide"]:
             ppsf = f"${g['ppsf']:,.2f}" if g["ppsf"] else "—"
+            pv = f"{g['pv']:.0%}" if g["pv"] else "—"
             P.append(f'<tr><td {td}>{e(g["type"])}</td><td {tdr}>{g["n"]}</td><td {tdr}><b>{g["median"]:.1f}×</b></td>'
-                     f'<td {tdr}>{g["p75"]:.1f}×</td><td {tdr}>{ppsf}</td></tr>')
+                     f'<td {tdr}>{pv}</td><td {tdr}>{ppsf}</td></tr>')
         P.append("</table>")
     notes = []
-    if d["lot_vs_comps"]:
-        notes.append(f'Vacant lots sell for a median <b>{d["lot_vs_comps"][0]:.0%}</b> of their comps value (n={d["lot_vs_comps"][1]}).')
+    if d["pv"]:
+        notes.append(f'Outside bidders have paid a median <b>{d["pv"][0]:.0%}</b> of the county\'s market value '
+                     f'(n={d["pv"][1]}, properties the county values at $20K or more). The opening bid is only the '
+                     f'unpaid taxes, so it says little about the final price.')
     if d["cities"]:
         notes.append("Most competitive cities: " + ", ".join(f'{e(c)} <b>{m:.1f}×</b> (n={n})' for c, m, n in d["cities"]) + ".")
     for c in d["county_rates"]:
@@ -1142,19 +1469,23 @@ def weekly_html(d: dict, chart_src: dict[str, str]) -> str:
     # upcoming
     P.append(f'<h2 {h2}>Your matches in the next 7 days</h2>')
     if not d["upcoming"]:
-        P.append(f'<p {sub}>None of your matches go to sale in the next 7 days.</p>')
+        P.append(f'<p {sub}>No listing graded "worth a look" goes to sale in the next 7 days.</p>')
     else:
-        P.append(f'<p {sub}>Likely price = opening bid × what similar properties have gone for (median – 75th percentile).</p>')
+        P.append(f'<p {sub}>Still on the auction list and graded "worth a look". Likely price is based on the county\'s value of each property.</p>')
         P.append('<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">')
         P.append(f'<tr><th {th}>Sale</th><th {th}>Property</th><th {thr}>Opening</th><th {thr}>Likely price</th></tr>')
         for u in d["upcoming"]:
             icon = "🌱" if u["cat"] == "lot" else "🏠"
-            est = f'{_m(u["est"][0])} – {_m(u["est"][1])}' if u["est"] else '<span style="color:#52514e">not enough data</span>'
+            est = f'{_k(u["est"][0])} – {_k(u["est"][1])}' if u["est"] else '<span style="color:#52514e">—</span>'
             P.append(f'<tr><td {td}>{e(u["date"][:5])}<br><span style="color:#52514e;font-size:11px">{e(u["county"])}</span></td>'
                      f'<td {td}>{icon} <b>{e(u["where"])}</b><br><span style="color:#52514e;font-size:12px">{e(u["type"])}</span><br>'
                      f'<span style="font-size:12px">{links(u["links"])}</span></td>'
                      f'<td {tdr}>{_m(u["bid"])}</td><td {tdr}>{est}</td></tr>')
         P.append("</table>")
+    if d.get("upcoming_other"):
+        P.append(f'<p style="font-size:13px;color:#52514e;margin:10px 0 0">{d["upcoming_other"]} other '
+                 f'match(es) go to sale in the next 7 days but were graded "probably not for you" '
+                 f'(unbuildable land, or likely to sell above your limit).</p>')
     P.append('<p style="font-size:11px;color:#8a8983;margin-top:26px">Generated by auction-watcher from the public auction '
              'calendars. For your own bidding decisions only.</p></div></div></body></html>')
     return "".join(P)
@@ -1176,8 +1507,9 @@ def weekly_telegram(d: dict) -> str:
         L.append("No tax deed sales this week.")
     if d["sold_week"]:
         L += ["", "<b>Top sales</b>"]
-        short = {"Vacant residential": "Lot", "Single family": "House", "Multi-family": "Multi",
-                 "Mobile home": "Mobile", "Other vacant": "Lot*", "Condo": "Condo"}
+        short = {"Vacant residential lots": "Lot", "Small vacant lots": "Small lot", "Raw acreage": "Acreage",
+                 "Other vacant land": "Land", "Single family": "House", "Multi-family": "Multi",
+                 "Mobile home": "Mobile", "Condo / co-op": "Condo", "Roads, canals, lakes": "Road/canal"}
         rows = [(_city(r)[:12], short.get(r["_g"], "Other"), _m(r["_amt"]),
                  f"{r['_x']:.1f}x" if r["_x"] else "cert") for r in d["sold_week"][:6]]
         table = [("City", "Type", "Paid", "x open")] + rows
@@ -1185,10 +1517,10 @@ def weekly_telegram(d: dict) -> str:
         fmt = lambda r: f"{r[0]:<{w[0]}} {r[1]:<{w[1]}} {r[2]:>{w[2]}} {r[3]:>{w[3]}}"
         L.append("<pre>" + e("\n".join(fmt(r) for r in table)) + "</pre>")
     if d["upcoming"]:
-        L += ["", f"<b>Next 7 days: {len(d['upcoming'])} of your matches</b>"]
+        L += ["", f"<b>Next 7 days: {len(d['upcoming'])} worth a look</b>"]
         for u in d["upcoming"][:5]:
             icon = "🌱" if u["cat"] == "lot" else "🏠"
-            est = f" → likely {_m(u['est'][0])}–{_m(u['est'][1])}" if u["est"] else ""
+            est = f" → likely {_k(u['est'][0])}–{_k(u['est'][1])}" if u["est"] else ""
             L.append(f"{icon} {e(u['date'][:5])} {e(u['where'])} · opens {_m(u['bid'])}{est}")
     L += ["", "Full report with tables, charts and Property Appraiser links attached ⬇️"]
     return "\n".join(L)
@@ -1237,6 +1569,51 @@ def send_weekly(today: date, dry_run: bool) -> None:
 
 
 # ----------------------------------------------------------------------------
+# HEALTH CHECK: tell the user when the watcher can't read a site, instead of going quiet
+# ----------------------------------------------------------------------------
+HEALTH: dict[str, dict] = {}      # county -> {"error"} or {"expected", "parsed", "note"}
+CAL_ACTIVE: dict[tuple[str, str], int] = {}   # (county, sale date) -> active listings shown on the calendar
+CAL_NOTE: dict[str, str] = {}
+GONE_WHY = {"REDEEMED": "redeemed: the owner paid the taxes", "NO": "no longer on the list", "SOLD": "already sold"}
+
+
+def health_problems() -> list[tuple[str, str]]:
+    out = []
+    for site in BASE_URLS:
+        county = county_of(site.split("|")[0])
+        name, h = COUNTY_NAME.get(county, county.title()), HEALTH.get(county) or {}
+        if h.get("error"):
+            out.append((county, f"{name}: could not open the auction site ({h['error'][:120]})"))
+        elif h.get("note"):
+            out.append((county, f"{name}: {h['note']}"))
+        elif h.get("expected", 0) > 0 and not h.get("parsed"):
+            out.append((county, f"{name}: the calendar shows {h['expected']} active listing(s) but none could "
+                                f"be read. The site's page format may have changed."))
+        tried, found = LOOKUPS.get(county, [0, 0])
+        if tried >= 3 and not found:
+            out.append((county, f"{name}: none of {tried} county property records could be looked up."))
+    return out
+
+
+def closed_statuses(pairs: set[tuple[str, str]]) -> dict[str, str]:
+    """Final status (Redeemed, Canceled...) of the listings on the given (county, sale date) days."""
+    bases = {county_of(b.split("|")[0]): b.split("|")[0].rstrip("/") for b in BASE_URLS}
+    out = {}
+    for county, ds in sorted(pairs):
+        if county not in bases:
+            continue
+        try:
+            s = requests.Session()
+            s.headers.update(HEADERS)
+            s.get(bases[county], timeout=30).raise_for_status()
+            for r in fetch_results_day(s, bases[county], county, datetime.strptime(ds, DATE_FORMAT).date()):
+                out[r["id"]] = r["status"]
+        except Exception as e:
+            print(f"[warn] status {county} {ds}: {e}", file=sys.stderr)
+    return out
+
+
+# ----------------------------------------------------------------------------
 # STATE + ALERTS
 # ----------------------------------------------------------------------------
 def load_seen() -> dict:
@@ -1267,51 +1644,78 @@ def days_until(sale_date: str, today: date) -> int | None:
         return None
 
 
-def fmt(item: dict) -> str:
-    bid = f"${item['bid']:,.2f}" if item["bid"] is not None else "n/a"
-    assessed = f"${item['assessed']:,.0f}" if item["assessed"] is not None else "n/a"
-    lines = [
-        *([CAT_LABEL[item["cat"]]] if item.get("cat") in CAT_LABEL else []),
-        f"{item['sale_date']}  {item.get('county', '').upper()}  {item['type']}  #{item['case']}"
-        + (f"  [{item['status']}]" if item.get("status") else ""),
-        f"Parcel: {item['parcel']}",
-        f"Address: {item['address'] or '(none)'} {item['city']}".rstrip(),
-        f"Bid: {bid}   Assessed: {assessed}",
-    ]
-    lu = item.get("land_use")
+def place(item: dict) -> tuple[str, str]:
+    """(street address, city), falling back to the county record when the listing has none."""
+    lu = item.get("land_use") or {}
+    addr = item.get("address") or lu.get("site_addr") or ""
+    city = (item.get("city") or "").split(",")[0].strip().title() or lu.get("site_city") or lu.get("muni") or ""
+    return addr, city
+
+
+def where(item: dict) -> str:
+    addr, city = place(item)
+    return ", ".join(x for x in (addr or "No street address", city) if x)
+
+
+def what(lu: dict, short: bool = False) -> str:
+    """'Single Family · 3 bd/2 ba · 1,450 sq ft · built 1962 · lot 7,130 sq ft'"""
+    if not lu:
+        return ""
+    bits = [(lu.get("desc") or "").split(" : ")[0].title()]
+    if short:
+        return bits[0]
+    if lu.get("beds"):
+        bits.append(f"{lu['beds']:g} bd" + (f"/{lu['baths']:g} ba" if lu.get("baths") else ""))
+    if lu.get("living_sqft"):
+        bits.append(f"{lu['living_sqft']:,} sq ft")
+    if lu.get("year_built"):
+        bits.append(f"built {lu['year_built']}")
+    if lu.get("lot_sqft"):
+        lot = f"{lu['lot_sqft']:,} sq ft"
+        if lu.get("living_sqft"):
+            lot = "lot " + lot
+        elif lu.get("dims"):
+            lot += f" (about {lu['dims'][0]} × {lu['dims'][1]} ft)"
+        bits.append(lot)
+    return " · ".join(b for b in bits if b)
+
+
+def detail_lines(item: dict) -> list[str]:
+    """The research lines of an alert, in plain text."""
+    lu = item.get("land_use") or {}
+    out = []
     if lu:
-        lines.append(f"Land use: {lu['code']} {lu['desc']}".rstrip())
-        vals = []
-        if lu["land_val"] is not None:
-            vals.append(f"land ${lu['land_val']:,.0f}")
-        if lu["total_val"] is not None:
-            vals.append(f"total ${lu['total_val']:,.0f}")
-        if lu.get("lot_sqft"):
-            acres = lu["lot_sqft"] / 43560
-            vals.append(f"lot {lu['lot_sqft']:,} sq ft ({acres:.2f} ac)")
-        if vals:
-            lines.append("PA values: " + ", ".join(vals))
-    elif folio_of(item):
-        lines.append("Land use: not found, check manually")
-    comps = (lu or {}).get("comps")
-    if comps is not None:
-        miles = comps["radius_ft"] / 5280
-        if comps["n"]:
-            line = (f"Comps: {comps['n']} vacant residential sales within {miles:.1f} mi "
-                    f"(last {COMP_YEARS}y): median ${comps['median_ppsf']:,.2f}/sq ft "
-                    f"(${comps['low_ppsf']:,.2f}-${comps['high_ppsf']:,.2f})")
-            lines.append(line)
-            if lu.get("lot_sqft"):
-                est = comps["median_ppsf"] * lu["lot_sqft"]
-                pct = f", bid = {item['bid'] / est:.0%} of that" if item.get("bid") and est else ""
-                lines.append(f"Est. land value ≈ ${est:,.0f}{pct}")
-        else:
-            lines.append(f"Comps: no vacant residential sales within {miles:.1f} mi in the last {COMP_YEARS}y")
-    if t := tags(item):
-        lines.append("Note: " + "; ".join(t))
-    for name, url in links_of(item):
-        lines.append(f"{name}: {url}")
-    return "\n".join(lines)
+        out.append(what(lu))
+        land, total, sqft = lu.get("land_val"), lu.get("total_val"), lu.get("lot_sqft")
+        if is_vacant(lu) and land is not None:
+            out.append(f"County value: {_k(land)}" + (f" (${land / sqft:,.2f}/sq ft)" if sqft else ""))
+        elif total:
+            out.append(f"County value: {_k(total)}" + (f" (land {_k(land)})" if land else ""))
+    est = item.get("est")
+    if est:
+        lo, hi, n = price_ratio()
+        basis = f"from {n} past sales" if n >= 5 else "a starting assumption until more sales are saved"
+        out.append(f"Likely price: {_k(est[0])}–{_k(est[1])} ({lo:.0%}–{hi:.0%} of county value, {basis})")
+    c = lu.get("comps")
+    if c and c.get("n"):
+        out.append(f"Nearby lot sales: {c['n']} within {c['radius_ft'] / 5280:.1f} mi, median ${c['median_ppsf']:,.2f}/sq ft"
+                   + (f" (this lot ≈ {_k(c['median_ppsf'] * lu['lot_sqft'])} at that rate)" if lu.get("lot_sqft") else ""))
+    facts = []
+    if lu.get("zone"):
+        desc = re.sub(r"\s+", " ", lu.get("zone_desc") or "").strip().capitalize()
+        facts.append(f"Zoning {lu['zone']}" + (f" ({desc[:70]})" if desc else ""))
+    if lu.get("flood") and not lu["flood"].upper().startswith(("A", "V")):  # A and V zones get a note instead
+        facts.append(f"flood zone {lu['flood']}")
+    if lu.get("owner"):
+        facts.append(f"owner {lu['owner']}")
+    if facts:
+        out.append(" · ".join(facts)[0].upper() + " · ".join(facts)[1:])
+    if item.get("flags"):
+        out.append("⚠️ " + "; ".join(item["flags"]).capitalize())
+    n = notes(item)
+    if n:
+        out.append("Note: " + "; ".join(n))
+    return out
 
 
 def links_of(item: dict) -> list[tuple[str, str]]:
@@ -1321,41 +1725,73 @@ def links_of(item: dict) -> list[tuple[str, str]]:
     if item.get("day_link"):
         out.append(("Sale day", item["day_link"]))
     out.extend(property_links(item.get("county", "miamidade"), item.get("parcel")))
+    lu = item.get("land_use") or {}
+    if lu.get("lat"):
+        ll = f"{lu['lat']},{lu['lon']}"
+        out.append(("Google Maps", f"https://www.google.com/maps/search/?api=1&query={ll}"))
+        out.append(("Street View", f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={ll}"))
     return out
 
 
+def _icon(item: dict) -> str:
+    return "🌱" if item.get("cat") == "lot" else "🏠"
+
+
+def _county(item: dict) -> str:
+    c = item.get("county", "")
+    return COUNTY_NAME.get(c, c.title()).upper()
+
+
+def fmt(item: dict) -> str:
+    """Full alert for one listing, plain text (email and logs)."""
+    bid = f"${item['bid']:,.2f}" if item.get("bid") is not None else "n/a"
+    lines = [f"{_icon(item)} {item['sale_date']}  {_county(item)}  #{item.get('case', '')}",
+             where(item),
+             f"Opening bid: {bid}   Parcel: {item.get('parcel', '')}"]
+    lines += detail_lines(item)
+    lines += [f"{name}: {url}" for name, url in links_of(item)]
+    return "\n".join(lines)
+
+
 def fmt_html(item: dict) -> str:
-    """Compact Telegram version of one listing (HTML)."""
+    """Full alert for one listing (Telegram HTML)."""
     e = html.escape
-    lu = item.get("land_use") or {}
-    head = f"<b>{e(item['sale_date'][:5])} · {e(item.get('county', '').upper())} · #{e(item['case'])}</b>"
-    if item.get("cat") == "property":
-        head = "🏠 " + head
-    elif item.get("cat") == "lot":
-        head = "🌱 " + head
-    addr = f"{item['address'] or 'no address'}, {item['city']}".strip(", ")
     bid = f"${item['bid']:,.0f}" if item.get("bid") is not None else "n/a"
-    lines = [head, e(addr), f"Opening bid <b>{bid}</b> · parcel <code>{e(item['parcel'])}</code>"]
-    bits = []
-    if lu.get("desc"):
-        bits.append(e(lu["desc"].title()))
-    if lu.get("lot_sqft"):
-        bits.append(f"{lu['lot_sqft']:,} sq ft")
-    if bits:
-        lines.append(" · ".join(bits))
-    c = lu.get("comps")
-    if c and c.get("n") and lu.get("lot_sqft"):
-        est = c["median_ppsf"] * lu["lot_sqft"]
-        pct = f" (bid {item['bid'] / est:.0%})" if item.get("bid") and est else ""
-        lines.append(f"Comps: {c['n']} sales, ${c['median_ppsf']:,.2f}/sq ft → ≈${est:,.0f}{pct}")
-    elif c is not None and not c.get("n"):
-        lines.append("Comps: none nearby")
-    if t := tags(item):
-        lines.append("<i>" + e("; ".join(t)) + "</i>")
+    lines = [f"{_icon(item)} <b>{e(item['sale_date'][:5])} · {e(_county(item))} · #{e(item.get('case', ''))}</b>",
+             e(where(item)),
+             f"Opening bid <b>{bid}</b> · parcel <code>{e(item.get('parcel', ''))}</code>"]
+    for ln in detail_lines(item):
+        if ln.startswith("Likely price"):
+            lines.append(f"<b>{e(ln)}</b>")
+        elif ln.startswith(("⚠️", "Note:")):
+            lines.append(f"<i>{e(ln)}</i>")
+        else:
+            lines.append(e(ln))
     ls = links_of(item)
     if ls:
         lines.append(" | ".join(f'<a href="{e(u, quote=True)}">{e(n)}</a>' for n, u in ls))
     return "\n".join(lines)
+
+
+def _line_parts(item: dict) -> list[str]:
+    bid = f"opens {_k(item['bid'])}" if item.get("bid") is not None else ""
+    return [p for p in (f"{item['sale_date'][:5]} {_county(item)}", where(item),
+                        what(item.get("land_use") or {}, short=True), bid) if p]
+
+
+def fmt_line(item: dict) -> str:
+    """One-line version, for listings that match the search but probably aren't for you."""
+    why = f" ({item['why']})" if item.get("why") else ""
+    link = next((u for n, u in links_of(item) if n == "Property"), item.get("link", ""))
+    return "• " + " · ".join(_line_parts(item)) + why + (f"\n  {link}" if link else "")
+
+
+def fmt_line_html(item: dict) -> str:
+    e = html.escape
+    why = f" <i>({e(item['why'])})</i>" if item.get("why") else ""
+    ls = [(n, u) for n, u in links_of(item) if n in ("Listing", "Property")]
+    links = " " + " ".join(f'<a href="{e(u, quote=True)}">{e(n)}</a>' for n, u in ls) if ls else ""
+    return "• " + e(" · ".join(_line_parts(item))) + why + links
 
 
 def tg(method: str, **payload) -> dict:
@@ -1366,19 +1802,18 @@ def tg(method: str, **payload) -> dict:
     return data.get("result")
 
 
-def send_telegram_html(items: list[dict], subject: str) -> None:
-    """Send listings as compact HTML messages (split to stay under Telegram's 4096-char limit)."""
-    blocks = [fmt_html(i) for i in items]
+def send_telegram_blocks(blocks: list[str], subject: str, sep: str = "\n\n") -> None:
+    """Send HTML blocks as one or more messages (split to stay under Telegram's 4096-char limit)."""
     chunks, cur = [], []
     for b in blocks:
-        if cur and (sum(len(x) for x in cur) + len(b) > 3500 or len(cur) >= 10):
+        if cur and sum(len(x) + len(sep) for x in cur) + len(b) > 3300:
             chunks.append(cur); cur = []
         cur.append(b)
     if cur:
         chunks.append(cur)
     for k, ch in enumerate(chunks, 1):
         subj = subject + (f" ({k}/{len(chunks)})" if len(chunks) > 1 else "")
-        text = f"<b>{html.escape(subj)}</b>\n\n" + "\n\n".join(ch)
+        text = f"<b>{html.escape(subj)}</b>\n\n" + sep.join(ch)
         tg("sendMessage", chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="HTML", disable_web_page_preview=True)
 
 
@@ -1400,15 +1835,21 @@ def send_email(subject: str, text: str) -> None:
         smtp.send_message(msg)
 
 
-def notify(items: list[dict], subject: str, dry_run: bool, seen: dict | None = None) -> None:
-    body = "\n\n".join(fmt(i) for i in items)
+def notify(items: list[dict], subject: str, dry_run: bool, compact: bool = False) -> None:
+    """Send one alert message: full cards, or one line per listing when compact."""
+    body = ("\n" if compact else "\n\n").join((fmt_line if compact else fmt)(i) for i in items)
+    send_message(subject, body, [(fmt_line_html if compact else fmt_html)(i) for i in items], dry_run,
+                 sep="\n" if compact else "\n\n")
+
+
+def send_message(subject: str, text: str, html_blocks: list[str], dry_run: bool, sep: str = "\n\n") -> None:
     if dry_run or not (TELEGRAM_TOKEN or SMTP_USER):
-        print(f"--- {subject} ---\n{body}")
+        print(f"--- {subject} ---\n{text}\n")
         return
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        send_telegram_html(items, subject)
+        send_telegram_blocks(html_blocks, subject, sep)
     if SMTP_USER and SMTP_PASS:
-        send_email(subject, body)
+        send_email(subject, text)
 
 
 # ----------------------------------------------------------------------------
@@ -1448,43 +1889,54 @@ def main() -> None:
             print(json.dumps({k: v for k, v in i.items() if k != "raw"}), "KEEP" if keep(i) else "skip")
         return
 
-    items = [i for i in fetch_all() if keep(i)]
+    fetched = fetch_all()
+    items = [i for i in fetched if keep(i)]
+    present = {i["id"] for i in fetched}
     seen = load_seen()
     today = date.today()
 
-    # 1) New listings: look up land use once, alert if they fit a category.
-    # Entries saved before categories existed ("cat" missing) that didn't match then
-    # are checked again, since the under-$100K property search may match them now.
-    new = [i for i in items if i["id"] not in seen
-           or ("cat" not in seen[i["id"]] and not seen[i["id"]].get("ok"))]
-    enrich(new)  # only look up parcels we haven't seen, to keep requests low
+    # 1) New listings (plus ones saved by an older version of this script, which are
+    #    re-checked once with the current rules): look up the parcel, decide if it matches.
+    new = [i for i in items if (seen.get(i["id"]) or {}).get("v") != STATE_VERSION]
+    enrich(new)
     for i in new:
         i["cat"] = category(i)
-    new_alerts = [i for i in new if i["cat"]]
+    matched = sorted((i for i in new if i["cat"]), key=lambda i: datetime.strptime(i["sale_date"], DATE_FORMAT))
+    research(matched)  # zoning, flood zone, map location, nearby sales: only for matches
+    for i in matched:
+        grade(i)
     for i in new:
+        old = seen.get(i["id"]) or {}
         d = days_until(i["sale_date"], today)
         seen[i["id"]] = {
+            "v": STATE_VERSION,
             "sale_date": i["sale_date"],
             "ok": bool(i["cat"]),
             "cat": i["cat"],
+            "tier": i.get("tier"), "flags": i.get("flags", []), "est": i.get("est"), "why": i.get("why", ""),
             "land_use": i.get("land_use"),
             # a listing first found inside a reminder window already got the "new" alert
-            "reminded": [r for r in REMIND_DAYS if d is not None and d <= r],
-            "bid": i.get("bid"), "address": i.get("address"), "city": i.get("city"),
-            "parcel": i.get("parcel"), "link": i.get("link"),
+            "reminded": old["reminded"] if old.get("ok") and "reminded" in old
+            else [r for r in REMIND_DAYS if d is not None and d <= r],
         }
 
-    # 2) Reminders: still-listed items (so cancelled sales drop out) whose sale is N days away
+    # 2) Keep the details of every listing that is still up for sale current
+    new_ids = {i["id"] for i in new}
+    for i in items:
+        st = seen[i["id"]]
+        st.update({"sale_date": i["sale_date"],  # the sale may have been rescheduled
+                   "bid": i.get("bid"), "case": i.get("case"), "parcel": i.get("parcel"), "link": i.get("link"),
+                   "address": i.get("address") or st.get("address"), "city": i.get("city") or st.get("city"),
+                   "last_seen": today.isoformat()})
+        st.pop("gone", None)
+
+    # 3) Reminders: good matches still up for sale, N days before the sale
     reminders: dict[int, list[dict]] = {r: [] for r in REMIND_DAYS}
     for i in items:
-        st = seen.get(i["id"])
-        if not st or not st.get("ok") or i["id"] in {n["id"] for n in new}:
+        st = seen[i["id"]]
+        if i["id"] in new_ids or not st.get("ok") or (st.get("tier") != "A" and not REMIND_ALL):
             continue
-        st["sale_date"] = i["sale_date"]  # the sale may have been rescheduled
-        i["land_use"] = st.get("land_use")
-        if "cat" not in st:  # saved before categories existed: it matched the lot search
-            st["cat"] = "lot"
-        i["cat"] = st["cat"]
+        i.update({k: st.get(k) for k in ("land_use", "cat", "tier", "flags", "est", "why")})
         d = days_until(i["sale_date"], today)
         if d is None:
             continue
@@ -1494,23 +1946,52 @@ def main() -> None:
             reminders[min(due)].append(i)
             st["reminded"] = sorted(set(st["reminded"]) | set(due), reverse=True)
 
-    print(f"{len(items)} matching, {len(new)} new, {len(new_alerts)} new alerts, "
-          + ", ".join(f"{len(v)} reminders at {k}d" for k, v in reminders.items()))
+    # 4) Good matches that left the list before their sale (redeemed, canceled...)
+    problems = health_problems()
+    sick = {c for c, _ in problems}
+    gone = []
+    for k, st in seen.items():
+        if k.startswith("_") or k in present or not st.get("ok") or st.get("tier") != "A" or st.get("gone"):
+            continue
+        d = days_until(st.get("sale_date", ""), today)
+        if d is not None and d >= 1 and k.split(":")[0] not in sick:
+            gone.append((k, st))
+    if gone:
+        status = closed_statuses({(k.split(":")[0], st["sale_date"]) for k, st in gone})
+        for k, st in gone:
+            st["gone"] = status.get(k, "No longer listed")
 
-    def by_cat(group: list[dict]):
-        for cat in ("lot", "property"):
-            g = [i for i in group if i.get("cat") == cat]
-            if g:
-                yield cat, g
+    a_new = [i for i in matched if i["tier"] == "A"]
+    b_new = [i for i in matched if i["tier"] != "A"]
+    print(f"{len(items)} listings, {len(new)} new, {len(a_new)} worth a look, {len(b_new)} other matches, "
+          + ", ".join(f"{len(v)} reminders at {k}d" for k, v in reminders.items()) + f", {len(gone)} gone")
 
-    for cat, g in by_cat(new_alerts):
-        what = "vacant lot(s)" if cat == "lot" else f"non-condo propert{'y' if len(g) == 1 else 'ies'} under ${PROPERTY_MAX_BID:,.0f}"
-        notify(g, f"🆕 {len(g)} new {what}", args.dry_run, seen)
+    plural = lambda n, one, many: one if n == 1 else many
+    lots = [i for i in a_new if i["cat"] == "lot"]
+    props = [i for i in a_new if i["cat"] != "lot"]
+    if lots:
+        notify(lots, f"🌱 {len(lots)} new vacant {plural(len(lots), 'lot', 'lots')} worth a look", args.dry_run)
+    if props:
+        notify(props, f"🏠 {len(props)} new {plural(len(props), 'property', 'properties')} that could sell "
+                      f"under ${PROPERTY_MAX_BID:,.0f}", args.dry_run)
+    if b_new:
+        notify(b_new, f"ℹ️ {len(b_new)} more new {plural(len(b_new), 'listing', 'listings')} that match your "
+                      f"search but probably aren't for you", args.dry_run, compact=True)
     for r, group in sorted(reminders.items(), reverse=True):
-        when = "tomorrow" if r == 1 else f"in {r} days"
-        for cat, g in by_cat(group):
-            what = "vacant lot" if cat == "lot" else "property"
-            notify(g, f"⏰ {len(g)} {what} auction(s) {when}", args.dry_run, seen)
+        if group:
+            when = "tomorrow" if r == 1 else f"in {r} days"
+            notify(group, f"⏰ {len(group)} {plural(len(group), 'auction', 'auctions')} {when}", args.dry_run)
+    if gone:
+        rows = [{**st, "id": k, "county": k.split(":")[0], "why": GONE_WHY.get(st["gone"].split()[0].upper(), st["gone"])}
+                for k, st in gone]
+        send_message(f"❌ {len(rows)} {plural(len(rows), 'listing', 'listings')} you were watching "
+                     f"{plural(len(rows), 'is', 'are')} off the list",
+                     "\n".join(fmt_line(r) for r in rows), [fmt_line_html(r) for r in rows], args.dry_run, sep="\n")
+    if problems and (seen.get("_health") or {}).get("date") != today.isoformat():
+        text = "\n".join(f"• {msg}" for _, msg in problems)
+        send_message("⚠️ Auction watcher needs attention", text + "\n\nAlerts may be incomplete until this is fixed.",
+                     [html.escape(text), "Alerts may be incomplete until this is fixed."], args.dry_run)
+        seen["_health"] = {"date": today.isoformat(), "problems": [m for _, m in problems]}
 
     if not args.dry_run:
         save_seen(seen)
