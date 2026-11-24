@@ -1,1071 +1,4 @@
 {
- "broward:1520560": {
-  "address": "4520 SW 23 ST",
-  "bid": 58126.58,
-  "case": "54119",
-  "cat": "property",
-  "city": "WEST PARK, FL- 33023",
-  "est": [
-   235500.0,
-   302800.0
-  ],
-  "flags": [],
-  "land_use": {
-   "_pid": "514219012631",
-   "baths": null,
-   "beds": null,
-   "code": "001",
-   "condo": false,
-   "desc": "SINGLE FAMILY",
-   "dims": [
-    50,
-    143
-   ],
-   "flood": "X",
-   "land_val": 49910,
-   "lat": 25.989617,
-   "living_sqft": 1094,
-   "lon": -80.188817,
-   "lot_sqft": 7130,
-   "lot_src": "LND_SQFOOT",
-   "owner": "JONES,CLARENCE",
-   "site_addr": "4520 SW 23 ST",
-   "site_city": "West Park",
-   "site_zip": "33023",
-   "total_val": 336390,
-   "units": 1,
-   "xy": [
-    922629.8,
-    602741.8
-   ],
-   "year_built": 1964
-  },
-  "last_seen": "2026-11-19",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1520560&bypassPage=1",
-  "ok": true,
-  "parcel": "514219-01-2631",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": "B",
-  "v": 2,
-  "why": "likely to sell for $236K\u2013$303K"
- },
- "broward:1520561": {
-  "address": "178 SW 3 ST",
-  "bid": 12245.68,
-  "case": "54120",
-  "cat": "property",
-  "city": "DEERFIELD BEACH, FL- 33441",
-  "est": [
-   128000.0,
-   164500.0
-  ],
-  "flags": [],
-  "land_use": {
-   "_pid": "484201030820",
-   "baths": null,
-   "beds": null,
-   "code": "001",
-   "condo": false,
-   "desc": "SINGLE FAMILY",
-   "dims": [
-    50,
-    141
-   ],
-   "flood": "AH",
-   "land_val": 43740,
-   "lat": 26.31393,
-   "living_sqft": 775,
-   "lon": -80.104858,
-   "lot_sqft": 6999,
-   "lot_src": "LND_SQFOOT",
-   "owner": "LAMAR,LATRICE &",
-   "site_addr": "178 SW 3 ST",
-   "site_city": "Deerfield Beach",
-   "site_zip": "33441",
-   "total_val": 182800,
-   "units": 1,
-   "xy": [
-    949398.5,
-    720806.4
-   ],
-   "year_built": 1955
-  },
-  "last_seen": "2026-11-20",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1520561&bypassPage=1",
-  "ok": true,
-  "parcel": "484201-03-0820",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": "B",
-  "v": 2,
-  "why": "likely to sell for $128K\u2013$164K"
- },
- "broward:1521020": {
-  "cat": null,
-  "land_use": {
-   "code": "004",
-   "desc": "CONDOMINIUM",
-   "land_val": 0,
-   "lot_sqft": 80589,
-   "lot_src": "parcel shape",
-   "total_val": 127420
-  },
-  "ok": false,
-  "reminded": [],
-  "sale_date": "11/23/2026"
- },
- "broward:1521021": {
-  "address": "6901 ENVIRON BOULEVARD #3A",
-  "bid": 18683.76,
-  "case": "53995",
-  "cat": null,
-  "city": "LAUDERHILL, FL- 33319",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "494122AA0370",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    442,
-    558
-   ],
-   "land_val": 0,
-   "living_sqft": 1160,
-   "lot_sqft": 140230,
-   "lot_src": "parcel shape",
-   "owner": "SUREPROFITS LLC",
-   "site_addr": "6901 ENVIRON BLVD",
-   "site_city": "Lauderhill",
-   "site_zip": "33319",
-   "total_val": 110440,
-   "units": 1,
-   "xy": [
-    904255.1,
-    670100.2
-   ],
-   "year_built": 1973
-  },
-  "last_seen": "2026-11-13",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521021&bypassPage=1",
-  "ok": false,
-  "parcel": "494122-AA-0370",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1521023": {
-  "address": "2751 NW 25 STREET",
-  "bid": 22583.8,
-  "case": "54011",
-  "cat": "property",
-  "city": "FORT LAUDERDALE, FL- 33311",
-  "est": [
-   282700.0,
-   363500.0
-  ],
-  "flags": [],
-  "land_use": {
-   "_pid": "494229070300",
-   "baths": null,
-   "beds": null,
-   "code": "001",
-   "condo": false,
-   "desc": "SINGLE FAMILY",
-   "dims": [
-    65,
-    105
-   ],
-   "flood": "X",
-   "land_val": 20480,
-   "lat": 26.157644,
-   "living_sqft": 1236,
-   "lon": -80.180063,
-   "lot_sqft": 6828,
-   "lot_src": "LND_SQFOOT",
-   "owner": "JONES,ADDIE L EST",
-   "site_addr": "2751 NW 25 ST",
-   "site_city": "Fort Lauderdale",
-   "site_zip": "33311",
-   "total_val": 403890,
-   "units": 1,
-   "xy": [
-    925121.2,
-    663834.4
-   ],
-   "year_built": 1959
-  },
-  "last_seen": "2026-11-20",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521023&bypassPage=1",
-  "ok": true,
-  "parcel": "494229-07-0300",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": "B",
-  "v": 2,
-  "why": "likely to sell for $283K\u2013$364K"
- },
- "broward:1521024": {
-  "address": "2670 E SUNRISE BOULEVARD #526",
-  "bid": 14427.46,
-  "case": "54013",
-  "cat": "property",
-  "city": "FORT LAUDERDALE, FL- 33304",
-  "est": [
-   65700.0,
-   84400.0
-  ],
-  "flags": [],
-  "land_use": {
-   "_pid": "504201BA0600",
-   "baths": null,
-   "beds": null,
-   "code": "039",
-   "condo": false,
-   "desc": "HOTELS, MOTELS",
-   "dims": [
-    269,
-    354
-   ],
-   "land_val": 0,
-   "lat": 26.137446,
-   "living_sqft": 379,
-   "lon": -80.109353,
-   "lot_sqft": 74445,
-   "lot_src": "parcel shape",
-   "owner": "HASSAN,DAN",
-   "site_addr": "2670 E SUNRISE BLVD",
-   "site_city": "Fort Lauderdale",
-   "site_zip": "33304",
-   "total_val": 93830,
-   "units": 1,
-   "xy": [
-    948366.6,
-    656645.3
-   ],
-   "year_built": 1988
-  },
-  "last_seen": "2026-11-22",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521024&bypassPage=1",
-  "ok": true,
-  "parcel": "504201-BA-0600",
-  "reminded": [
-   7,
-   1
-  ],
-  "sale_date": "11/23/2026",
-  "tier": "A",
-  "v": 2,
-  "why": ""
- },
- "broward:1521026": {
-  "address": "1865 S OCEAN DRIVE #10A",
-  "bid": 41399.25,
-  "case": "54027",
-  "cat": null,
-  "city": "HALLANDALE BEACH, FL- 33009",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "514226CG1060",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    300,
-    606
-   ],
-   "land_val": 0,
-   "living_sqft": 1776,
-   "lot_sqft": 180495,
-   "lot_src": "parcel shape",
-   "owner": "PORWICH,ALAN S & KATZMAN,NANCY",
-   "site_addr": "1865 S OCEAN DR",
-   "site_city": "Hallandale Beach",
-   "site_zip": "33009",
-   "total_val": 336600,
-   "units": 1,
-   "xy": [
-    944952.9,
-    600702.6
-   ],
-   "year_built": 1974
-  },
-  "last_seen": "2026-11-22",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521026&bypassPage=1",
-  "ok": false,
-  "parcel": "514226-CG-1060",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1521027": {
-  "address": "227 NW 11 STREET",
-  "bid": 27725.86,
-  "case": "54028",
-  "cat": "property",
-  "city": "POMPANO BEACH, FL- 33060",
-  "est": [
-   192000.0,
-   246900.0
-  ],
-  "flags": [],
-  "land_use": {
-   "_pid": "484235320510",
-   "baths": null,
-   "beds": null,
-   "code": "001",
-   "condo": false,
-   "desc": "SINGLE FAMILY",
-   "dims": [
-    144,
-    151
-   ],
-   "land_val": 129600,
-   "lat": 26.242187,
-   "living_sqft": 1272,
-   "lon": -80.126064,
-   "lot_sqft": 21600,
-   "lot_src": "LND_SQFOOT",
-   "owner": "DULCIETA PROPERTIES INC",
-   "site_addr": "227 NW 11 ST",
-   "site_city": "Pompano Beach",
-   "site_zip": "33060",
-   "total_val": 274290,
-   "units": 1,
-   "xy": [
-    942627.7,
-    694680.7
-   ],
-   "year_built": 1950
-  },
-  "last_seen": "2026-11-20",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521027&bypassPage=1",
-  "ok": true,
-  "parcel": "484235-32-0510",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": "B",
-  "v": 2,
-  "why": "likely to sell for $192K\u2013$247K"
- },
- "broward:1521029": {
-  "address": "1278 SE 7 COURT",
-  "bid": 57818.29,
-  "case": "54033",
-  "cat": "property",
-  "city": "DEERFIELD BEACH, FL- 33441",
-  "est": [
-   459900.0,
-   591200.0
-  ],
-  "flags": [],
-  "land_use": {
-   "_pid": "484305100390",
-   "baths": null,
-   "beds": null,
-   "code": "001",
-   "condo": false,
-   "desc": "SINGLE FAMILY",
-   "dims": [
-    75,
-    100
-   ],
-   "flood": "AE",
-   "land_val": 90000,
-   "lat": 26.307906,
-   "living_sqft": 1622,
-   "lon": -80.085874,
-   "lot_sqft": 7500,
-   "lot_src": "LND_SQFOOT",
-   "owner": "I LEE REI LLC",
-   "site_addr": "1278 SE 7 CT",
-   "site_city": "Deerfield Beach",
-   "site_zip": "33441",
-   "total_val": 656930,
-   "units": 1,
-   "xy": [
-    955633.2,
-    718660.2
-   ],
-   "year_built": 1956
-  },
-  "last_seen": "2026-11-19",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521029&bypassPage=1",
-  "ok": true,
-  "parcel": "484305-10-0390",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": "B",
-  "v": 2,
-  "why": "likely to sell for $460K\u2013$591K"
- },
- "broward:1521030": {
-  "address": "1737 NW 56 AVENUE #15",
-  "bid": 23213.29,
-  "case": "54040",
-  "cat": null,
-  "city": "LAUDERHILL, FL- 33313",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "494135FH0010",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    33,
-    125
-   ],
-   "land_val": 0,
-   "living_sqft": 2100,
-   "lot_sqft": 4071,
-   "lot_src": "LND_SQFOOT",
-   "owner": "GORDON,ROBERT",
-   "site_addr": "1737 NW 56 AVE",
-   "site_city": "Lauderhill",
-   "site_zip": "33313",
-   "total_val": 294740,
-   "units": 1,
-   "xy": [
-    910468.7,
-    659770.0
-   ],
-   "year_built": 1973
-  },
-  "last_seen": "2026-11-16",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521030&bypassPage=1",
-  "ok": false,
-  "parcel": "494135-FH-0010",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1521048": {
-  "cat": "property",
-  "land_use": {
-   "code": "008",
-   "desc": "MULTI-FAMILY <10 UNITS",
-   "land_val": 202500,
-   "lot_sqft": 6750,
-   "lot_src": "LND_SQFOOT",
-   "total_val": 978420
-  },
-  "ok": true,
-  "reminded": [],
-  "sale_date": "11/23/2026"
- },
- "broward:1521049": {
-  "address": "11176 W SAMPLE RD #11176",
-  "bid": 20936.56,
-  "case": "53988",
-  "cat": null,
-  "city": "CORAL SPRINGS, FL- 33065",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "484120HE0040",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    150,
-    279
-   ],
-   "land_val": 0,
-   "living_sqft": 1080,
-   "lot_sqft": 32167,
-   "lot_src": "parcel shape",
-   "owner": "TOUSSAINT,ROBIN KERVIN",
-   "site_addr": "11176 W SAMPLE RD",
-   "site_city": "Coral Springs",
-   "site_zip": "33065",
-   "total_val": 214640,
-   "units": 1,
-   "xy": [
-    893865.9,
-    705401.2
-   ],
-   "year_built": 1988
-  },
-  "last_seen": "2026-11-20",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521049&bypassPage=1",
-  "ok": false,
-  "parcel": "484120-HE-0040",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1521300": {
-  "address": "2641 NW 87 AVE",
-  "bid": 79128.44,
-  "case": "54081",
-  "cat": "property",
-  "city": "SUNRISE, FL- 33322",
-  "est": [
-   305500.0,
-   392800.0
-  ],
-  "flags": [],
-  "land_use": {
-   "_pid": "494128130550",
-   "baths": null,
-   "beds": null,
-   "code": "001",
-   "condo": false,
-   "desc": "SINGLE FAMILY",
-   "dims": [
-    141,
-    141
-   ],
-   "flood": "X",
-   "land_val": 83970,
-   "lat": 26.158141,
-   "living_sqft": 1586,
-   "lon": -80.266241,
-   "lot_sqft": 12440,
-   "lot_src": "LND_SQFOOT",
-   "owner": "CATHERINE,CORINNE",
-   "site_addr": "2641 NW 87 AVE",
-   "site_city": "Sunrise",
-   "site_zip": "33322",
-   "total_val": 436420,
-   "units": 1,
-   "xy": [
-    896851.2,
-    663846.0
-   ],
-   "year_built": 1972
-  },
-  "last_seen": "2026-11-20",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521300&bypassPage=1",
-  "ok": true,
-  "parcel": "494128-13-0550",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": "B",
-  "v": 2,
-  "why": "likely to sell for $306K\u2013$393K"
- },
- "broward:1521301": {
-  "address": "12 NE 19 CT #117A",
-  "bid": 86675.19,
-  "case": "54092",
-  "cat": null,
-  "city": "WILTON MANORS, FL- 33305",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "494227AC0150",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    550,
-    764
-   ],
-   "land_val": 0,
-   "living_sqft": 750,
-   "lot_sqft": 280180,
-   "lot_src": "parcel shape",
-   "owner": "VEGA-FELICIANO,NELSON",
-   "site_addr": "12 NE 19 CT",
-   "site_city": "Wilton Manors",
-   "site_zip": "33305",
-   "total_val": 155820,
-   "units": 1,
-   "xy": [
-    936564.4,
-    661762.8
-   ],
-   "year_built": 1970
-  },
-  "last_seen": "2026-11-22",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521301&bypassPage=1",
-  "ok": false,
-  "parcel": "494227-AC-0150",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1521304": {
-  "address": "580 EGRET DR UNIT 113",
-  "bid": 16961.59,
-  "case": "54107",
-  "cat": null,
-  "city": "HALLANDALE BEACH, FL- 33009",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "514226RX0130",
-   "baths": null,
-   "beds": null,
-   "code": "005",
-   "condo": false,
-   "desc": "COOPERATIVES",
-   "dims": [
-    251,
-    421
-   ],
-   "land_val": 0,
-   "living_sqft": 750,
-   "lot_sqft": 88634,
-   "lot_src": "parcel shape",
-   "owner": "CALLIS,WILLIAM A",
-   "site_addr": "580 EGRET DR",
-   "site_city": "Hallandale Beach",
-   "site_zip": "33009",
-   "total_val": 126360,
-   "units": 1,
-   "xy": [
-    941171.4,
-    599874.8
-   ],
-   "year_built": 1969
-  },
-  "last_seen": "2026-11-22",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521304&bypassPage=1",
-  "ok": false,
-  "parcel": "514226-RX-0130",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1521305": {
-  "address": "1320 NW 43 TER APT 206",
-  "bid": 12419.26,
-  "case": "54062",
-  "cat": null,
-  "city": "LAUDERHILL, FL- 33313",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "494136BE0290",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    290,
-    355
-   ],
-   "land_val": 0,
-   "living_sqft": 950,
-   "lot_sqft": 70727,
-   "lot_src": "parcel shape",
-   "owner": "HUDSON,BISHOP B &",
-   "site_addr": "1320 NW 43 TER",
-   "site_city": "Lauderhill",
-   "site_zip": "33313",
-   "total_val": 96140,
-   "units": 1,
-   "xy": [
-    916125.1,
-    658424.9
-   ],
-   "year_built": 1967
-  },
-  "last_seen": "2026-11-22",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521305&bypassPage=1",
-  "ok": false,
-  "parcel": "494136-BE-0290",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1521316": {
-  "address": "7207 SW 4 CT",
-  "bid": 48033.67,
-  "case": "54066",
-  "cat": "property",
-  "city": "NORTH LAUDERDALE, FL- 33068",
-  "est": [
-   229900.0,
-   295600.0
-  ],
-  "flags": [],
-  "land_use": {
-   "_pid": "494102071270",
-   "baths": null,
-   "beds": null,
-   "code": "001",
-   "condo": false,
-   "desc": "SINGLE FAMILY",
-   "dims": [
-    60,
-    100
-   ],
-   "flood": "X",
-   "land_val": 23960,
-   "lat": 26.22537,
-   "living_sqft": 1068,
-   "lon": -80.22226,
-   "lot_sqft": 5991,
-   "lot_src": "LND_SQFOOT",
-   "owner": "REED,KATHLEEN A",
-   "site_addr": "7207 SW 4 CT",
-   "site_city": "North Lauderdale",
-   "site_zip": "33068",
-   "total_val": 328470,
-   "units": 1,
-   "xy": [
-    911131.9,
-    688366.7
-   ],
-   "year_built": 1973
-  },
-  "last_seen": "2026-11-19",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1521316&bypassPage=1",
-  "ok": true,
-  "parcel": "494102-07-1270",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": "B",
-  "v": 2,
-  "why": "likely to sell for $230K\u2013$296K"
- },
- "broward:1523308": {
-  "address": "2649 NW 48 TER #339",
-  "bid": 13599.45,
-  "case": "53902",
-  "cat": null,
-  "city": "LAUDERDALE LAKES, FL- 33313",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "494125HM0590",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    282,
-    522
-   ],
-   "land_val": 0,
-   "living_sqft": 960,
-   "lot_sqft": 116979,
-   "lot_src": "parcel shape",
-   "owner": "SAJOUS,GERALD LE",
-   "site_addr": "2649 NW 48 TER",
-   "site_city": "Lauderdale Lakes",
-   "site_zip": "33313",
-   "total_val": 103000,
-   "units": 1,
-   "xy": [
-    913445.7,
-    664480.7
-   ],
-   "year_built": 1977
-  },
-  "last_seen": "2026-11-20",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1523308&bypassPage=1",
-  "ok": false,
-  "parcel": "494125-HM-0590",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1523309": {
-  "address": "8100 SUNRISE LAKES BLVD #207",
-  "bid": 9891.54,
-  "case": "53903",
-  "cat": null,
-  "city": "SUNRISE, FL- 33322",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "494128DC0190",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    249,
-    330
-   ],
-   "land_val": 0,
-   "living_sqft": 640,
-   "lot_sqft": 59056,
-   "lot_src": "parcel shape",
-   "owner": "COLON,ILDEFONSO",
-   "site_addr": "8100 SUNRISE LAKES BLVD",
-   "site_city": "Sunrise",
-   "site_zip": "33322",
-   "total_val": 77480,
-   "units": 1,
-   "xy": [
-    898846.3,
-    665455.2
-   ],
-   "year_built": 1974
-  },
-  "last_seen": "2026-11-22",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1523309&bypassPage=1",
-  "ok": false,
-  "parcel": "494128-DC-0190",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1523310": {
-  "land_use": {
-   "code": "004",
-   "desc": "CONDOMINIUM",
-   "land_val": 0,
-   "lot_sqft": 621,
-   "lot_src": "LND_SQFOOT",
-   "total_val": 222220
-  },
-  "ok": false,
-  "reminded": [],
-  "sale_date": "11/23/2026"
- },
- "broward:1523311": {
-  "address": "9301 LIME BAY BLVD #215",
-  "bid": 66309.43,
-  "case": "53922",
-  "cat": null,
-  "city": "TAMARAC, FL- 33321",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "494108BA0700",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    249,
-    345
-   ],
-   "land_val": 0,
-   "living_sqft": 950,
-   "lot_sqft": 308461,
-   "lot_src": "parcel shape",
-   "owner": "SARBU,PETRU DAN H/E",
-   "site_addr": "9301 LIME BAY BLVD",
-   "site_city": "Tamarac",
-   "site_zip": "33321",
-   "total_val": 103560,
-   "units": 1,
-   "xy": [
-    893576.0,
-    681644.3
-   ],
-   "year_built": 1974
-  },
-  "last_seen": "2026-11-22",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1523311&bypassPage=1",
-  "ok": false,
-  "parcel": "494108-BA-0700",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1523312": {
-  "land_use": {
-   "code": "004",
-   "desc": "CONDOMINIUM",
-   "land_val": 0,
-   "lot_sqft": 36791,
-   "lot_src": "parcel shape",
-   "total_val": 73880
-  },
-  "ok": false,
-  "reminded": [],
-  "sale_date": "11/23/2026"
- },
- "broward:1523315": {
-  "address": "2120 NE 62 CT",
-  "bid": 75572.45,
-  "case": "53956",
-  "cat": "property",
-  "city": "FORT LAUDERDALE, FL- 33308",
-  "est": [
-   420200.0,
-   540300.0
-  ],
-  "flags": [],
-  "land_use": {
-   "_pid": "494212072340",
-   "baths": null,
-   "beds": null,
-   "code": "001",
-   "condo": false,
-   "desc": "SINGLE FAMILY",
-   "dims": [
-    75,
-    100
-   ],
-   "flood": "AE",
-   "land_val": 75000,
-   "lat": 26.204271,
-   "living_sqft": 1450,
-   "lon": -80.116836,
-   "lot_sqft": 7500,
-   "lot_src": "LND_SQFOOT",
-   "owner": "KAI BLUE PROPERTY",
-   "site_addr": "2120 NE 62 CT",
-   "site_city": "Fort Lauderdale",
-   "site_zip": "33308",
-   "total_val": 600280,
-   "units": 1,
-   "xy": [
-    945746.4,
-    680918.6
-   ],
-   "year_built": 1961
-  },
-  "last_seen": "2026-11-22",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1523315&bypassPage=1",
-  "ok": true,
-  "parcel": "494212-07-2340",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": "B",
-  "v": 2,
-  "why": "likely to sell for $420K\u2013$540K"
- },
- "broward:1523317": {
-  "address": "5540 LAKESIDE DR #101",
-  "bid": 23315.18,
-  "case": "53958",
-  "cat": null,
-  "city": "MARGATE, FL- 33063",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "484231AJ0370",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    28,
-    33
-   ],
-   "land_val": 0,
-   "living_sqft": 815,
-   "lot_sqft": 888,
-   "lot_src": "LND_SQFOOT",
-   "owner": "GASSMAN,JEFFREY WARREN",
-   "site_addr": "5540 LAKESIDE DR",
-   "site_city": "Margate",
-   "site_zip": "33063",
-   "total_val": 205490,
-   "units": 1,
-   "xy": [
-    918509.5,
-    693238.9
-   ],
-   "year_built": 1986
-  },
-  "last_seen": "2026-11-20",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1523317&bypassPage=1",
-  "ok": false,
-  "parcel": "484231-AJ-0370",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
- "broward:1523318": {
-  "land_use": {
-   "code": "004",
-   "desc": "CONDOMINIUM",
-   "land_val": 0,
-   "lot_sqft": 52063,
-   "lot_src": "parcel shape",
-   "total_val": 110520
-  },
-  "ok": false,
-  "reminded": [],
-  "sale_date": "11/23/2026"
- },
- "broward:1523417": {
-  "address": "4017 N CYPRESS DR #105",
-  "bid": 30102.66,
-  "case": "53779",
-  "cat": null,
-  "city": "POMPANO BEACH, FL- 33069",
-  "est": null,
-  "flags": [],
-  "land_use": {
-   "_pid": "494205AH0170",
-   "baths": null,
-   "beds": null,
-   "code": "004",
-   "condo": false,
-   "desc": "CONDOMINIUM",
-   "dims": [
-    41,
-    42
-   ],
-   "land_val": 0,
-   "living_sqft": 1500,
-   "lot_sqft": 1672,
-   "lot_src": "LND_SQFOOT",
-   "owner": "REGAL UNIVERSAL INVESTMENTS",
-   "site_addr": "4017 N CYPRESS DR",
-   "site_city": "Pompano Beach",
-   "site_zip": "33069",
-   "total_val": 271300,
-   "units": 1,
-   "xy": [
-    926407.4,
-    685214.2
-   ],
-   "year_built": 1976
-  },
-  "last_seen": "2026-11-22",
-  "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1523417&bypassPage=1",
-  "ok": false,
-  "parcel": "494205-AH-0170",
-  "reminded": [],
-  "sale_date": "11/23/2026",
-  "tier": null,
-  "v": 2,
-  "why": ""
- },
  "broward:1524995": {
   "address": "315 NE 3 AVE #1805",
   "bid": 19641.89,
@@ -1101,7 +34,7 @@
    ],
    "year_built": 2007
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1524995&bypassPage=1",
   "ok": false,
   "parcel": "504203-BF-0860",
@@ -1197,7 +130,7 @@
    ],
    "year_built": 1995
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525005&bypassPage=1",
   "ok": false,
   "parcel": "504235-AC-0060",
@@ -1247,7 +180,7 @@
    ],
    "year_built": 1996
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525037&bypassPage=1",
   "ok": true,
   "parcel": "484106-07-0240",
@@ -1298,7 +231,7 @@
    ],
    "year_built": 2004
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525038&bypassPage=1",
   "ok": true,
   "parcel": "504214-03-0633",
@@ -1343,7 +276,7 @@
    ],
    "year_built": 1981
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525045&bypassPage=1",
   "ok": false,
   "parcel": "484229-HD-0290",
@@ -1388,7 +321,7 @@
    ],
    "year_built": 1989
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525169&bypassPage=1",
   "ok": false,
   "parcel": "484134-BB-0020",
@@ -1433,7 +366,7 @@
    ],
    "year_built": 1984
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525191&bypassPage=1",
   "ok": false,
   "parcel": "484134-AD-0040",
@@ -1478,7 +411,7 @@
    ],
    "year_built": 1966
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525205&bypassPage=1",
   "ok": false,
   "parcel": "484136-AA-0010",
@@ -1523,7 +456,7 @@
    ],
    "year_built": 1973
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525231&bypassPage=1",
   "ok": false,
   "parcel": "494111-AD-1080",
@@ -1568,7 +501,7 @@
    ],
    "year_built": 1973
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525545&bypassPage=1",
   "ok": false,
   "parcel": "494122-AC-0390",
@@ -1619,7 +552,7 @@
    ],
    "year_built": 1972
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525593&bypassPage=1",
   "ok": true,
   "parcel": "514123-07-3960",
@@ -1669,7 +602,7 @@
    ],
    "year_built": 1964
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526893&bypassPage=1",
   "ok": true,
   "parcel": "504204-25-0420",
@@ -1723,7 +656,7 @@
    ],
    "year_built": null
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526894&bypassPage=1",
   "ok": true,
   "parcel": "484235-27-0100",
@@ -1768,7 +701,7 @@
    ],
    "year_built": 1974
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526895&bypassPage=1",
   "ok": false,
   "parcel": "494108-AG-0070",
@@ -1819,7 +752,7 @@
    ],
    "year_built": 1958
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526896&bypassPage=1",
   "ok": true,
   "parcel": "484223-04-0920",
@@ -1864,7 +797,7 @@
    ],
    "year_built": 1978
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526897&bypassPage=1",
   "ok": false,
   "parcel": "494109-AM-0640",
@@ -1961,7 +894,7 @@
    ],
    "year_built": 1957
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526901&bypassPage=1",
   "ok": false,
   "parcel": "514212-BG-0060",
@@ -2012,7 +945,7 @@
    ],
    "year_built": 1995
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526902&bypassPage=1",
   "ok": true,
   "parcel": "504204-09-0030",
@@ -2057,7 +990,7 @@
    ],
    "year_built": 1974
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526904&bypassPage=1",
   "ok": false,
   "parcel": "514117-AB-5200",
@@ -2109,7 +1042,7 @@
    ],
    "year_built": null
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526906&bypassPage=1",
   "ok": true,
   "parcel": "494136-BA-0090",
@@ -2154,7 +1087,7 @@
    ],
    "year_built": 1975
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526999&bypassPage=1",
   "ok": false,
   "parcel": "494123-GA-0100",
@@ -2199,7 +1132,7 @@
    ],
    "year_built": 1974
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1527000&bypassPage=1",
   "ok": false,
   "parcel": "484223-BM-0570",
@@ -2250,7 +1183,7 @@
    ],
    "year_built": 1966
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1527021&bypassPage=1",
   "ok": true,
   "parcel": "504112-06-0490",
@@ -2301,7 +1234,7 @@
    ],
    "year_built": 1988
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1527042&bypassPage=1",
   "ok": true,
   "parcel": "504234-01-0900",
@@ -2346,7 +1279,7 @@
    ],
    "year_built": 1974
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1527048&bypassPage=1",
   "ok": false,
   "parcel": "494124-HC-0730",
@@ -2442,7 +1375,7 @@
    ],
    "year_built": null
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1527198&bypassPage=1",
   "ok": true,
   "parcel": "504234-01-2320",
@@ -2493,7 +1426,7 @@
    ],
    "year_built": null
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1527206&bypassPage=1",
   "ok": true,
   "parcel": "494202-03-1011",
@@ -2541,7 +1474,7 @@
    ],
    "year_built": 1987
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1527279&bypassPage=1",
   "ok": true,
   "parcel": "514108-BD-0010",
@@ -2586,7 +1519,7 @@
    ],
    "year_built": 1972
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1527293&bypassPage=1",
   "ok": false,
   "parcel": "494125-CG-0040",
@@ -2637,7 +1570,7 @@
    ],
    "year_built": 1956
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1527298&bypassPage=1",
   "ok": true,
   "parcel": "514123-10-0460",
@@ -2688,7 +1621,7 @@
    ],
    "year_built": null
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://broward.realtaxdeed.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1528775&bypassPage=1",
   "ok": true,
   "parcel": "494222-08-0521",
@@ -2744,7 +1677,7 @@
    "zone": "GU",
    "zone_desc": "Interim District - Uses depend on character of neighborhood, otherwise EU-2 standards apply"
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://www.miamidade.realforeclose.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525192&bypassPage=1",
   "ok": true,
   "parcel": "30-9905-000-1170",
@@ -2800,7 +1733,7 @@
    "zone": "GU",
    "zone_desc": "Interim District - Uses depend on character of neighborhood, otherwise EU-2 standards apply"
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://www.miamidade.realforeclose.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525194&bypassPage=1",
   "ok": true,
   "parcel": "30-9905-000-4180",
@@ -2856,7 +1789,7 @@
    "zone": "GU",
    "zone_desc": "Interim District - Uses depend on character of neighborhood, otherwise EU-2 standards apply"
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://www.miamidade.realforeclose.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1525198&bypassPage=1",
   "ok": true,
   "parcel": "30-8814-000-0940",
@@ -2910,7 +1843,7 @@
    "zone": "RD-1",
    "zone_desc": "RESIDENTIAL DUPLEX DISTRICT 1"
   },
-  "last_seen": "2026-11-23",
+  "last_seen": "2026-11-24",
   "link": "https://www.miamidade.realforeclose.com/index.cfm?zaction=AUCTION&Zmethod=DETAILS&AID=1526257&bypassPage=1",
   "ok": true,
   "parcel": "16-7824-008-1050",
